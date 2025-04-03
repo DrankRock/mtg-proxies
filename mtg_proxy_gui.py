@@ -56,11 +56,11 @@ class CardWorker:
             return False
             
         try:
-            # Using A4 paper as default
+            # Using A4 paper as default - FIXED: Use correct units (mm)
             print_cards_fpdf(
                 self.images,
                 output_path,
-                papersize=np.array([21, 29.7]),  # A4 in cm
+                papersize=np.array([210, 297]),  # A4 in mm (not cm)
                 cardsize=np.array([2.5, 3.5]) * 25.4,  # Standard MTG card size in mm
                 cropmarks=True
             )
