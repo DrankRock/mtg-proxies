@@ -20,7 +20,8 @@ from tqdm import tqdm
 
 from scryfall.rate_limit import RateLimiter
 
-cache = Path(gettempdir()) / "scryfall_cache"
+# Change cache location from temp directory to ./card_images
+cache = Path("./card_images")
 cache.mkdir(parents=True, exist_ok=True)  # Create cache folder
 scryfall_rate_limiter = RateLimiter(delay=0.1)
 _download_lock = threading.Lock()
