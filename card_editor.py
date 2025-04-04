@@ -4,6 +4,7 @@ from PIL import Image, ImageTk, ImageDraw, ImageFont
 import numpy as np
 import cv2
 import os
+import json
 from pathlib import Path
 from enum import Enum, auto
 
@@ -15,6 +16,32 @@ class EditorTool(Enum):
     LOAD_IMAGE = auto()
     PAN = auto()
 
+class CardPreset:
+    def __init__(self, name, image_rect=None, name_rect=None, type_rect=None, description_rect=None):
+        self.name = name
+        self.image_rect = image_rect or {"x": 0.10, "y": 0.20, "width": 0.80, "height": 0.50}
+        self.name_rect = name_rect or {"x": 0.10, "y": 0.05, "width": 0.80, "height": 0.10}
+        self.type_rect = type_rect or {"x": 0.10, "y": 0.75, "width": 0.80, "height": 0.08}
+        self.description_rect = description_rect or {"x": 0.10, "y": 0.85, "width": 0.80, "height": 0.12}
+        
+    def to_dict(self):
+        return {
+            "name": self.name,
+            "image_rect": self.image_rect,
+            "name_rect": self.name_rect,
+            "type_rect": self.type_rect,
+            "description_rect": self.description_rect
+        }
+    
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            name=data["name"],
+            image_rect=data["image_rect"],
+            name_rect=data["name_rect"],
+            type_rect=data["type_rect"],
+            description_rect=data["description_rect"]
+        )
 
 class CardEditor:
     def __init__(self, root, image_path):
@@ -24,11 +51,12 @@ class CardEditor:
         
         # Set up window
         self.root.title(f"Card Editor - {Path(image_path).name}")
-        self.root.geometry("1000x800")
+        self.root.geometry("1200x800")
         
         # Configure main grid
         self.root.grid_columnconfigure(0, weight=0)  # Toolbar
         self.root.grid_columnconfigure(1, weight=1)  # Canvas
+        self.root.grid_columnconfigure(2, weight=0) # Presets
         self.root.grid_rowconfigure(0, weight=1)
         
         # Load the image
@@ -60,6 +88,8 @@ class CardEditor:
         self.v_scrollbar.grid(row=0, column=1, sticky="ns")
         
         self.canvas.configure(xscrollcommand=self.h_scrollbar.set, yscrollcommand=self.v_scrollbar.set)
+
+        self.create_presets_panel()
         
         # Status bar
         self.status_frame = ttk.Frame(root)
@@ -85,6 +115,11 @@ class CardEditor:
         self.zoom_factor = 1.0
         self.pan_start_x = 0
         self.pan_start_y = 0
+
+        # Presets variables
+        self.presets = []
+        self.current_preset = None
+        self.load_presets()  # Load presets from file if available
         
         # Set up event bindings
         self.setup_bindings()
@@ -95,6 +130,690 @@ class CardEditor:
         # Initialize with PAN tool selected
         self.set_tool(EditorTool.PAN)
         
+
+    def load_presets(self):
+        """Load presets from presets folder"""
+        try:
+            # Create presets directory if it doesn't exist
+            presets_dir = Path("./presets")
+            presets_dir.mkdir(exist_ok=True)
+            
+            # Check if any preset files exist
+            preset_files = list(presets_dir.glob("*.json"))
+            
+            if preset_files:
+                # Load each preset from its file
+                self.presets = []
+                for preset_file in preset_files:
+                    try:
+                        with open(preset_file, "r") as f:
+                            preset_data = json.load(f)
+                        # Add to presets list
+                        self.presets.append(CardPreset.from_dict(preset_data))
+                    except Exception as e:
+                        print(f"Error loading preset {preset_file}: {str(e)}")
+                
+                # Update UI
+                self.update_presets_list()
+                self.status_label.config(text="Presets loaded")
+            else:
+                # Create default "Normal mtg card" preset
+                default_preset = CardPreset(name="Normal mtg card")
+                self.presets.append(default_preset)
+                self.update_presets_list()
+                
+                # Save the default preset
+                self.save_preset(default_preset)
+        except Exception as e:
+            # Create default preset on error
+            default_preset = CardPreset(name="Normal mtg card")
+            self.presets.append(default_preset)
+            self.update_presets_list()
+            tk.messagebox.showwarning("Error", f"Failed to load presets: {str(e)}\nUsing default preset.")
+
+    def save_preset(self, preset):
+        """Save a single preset to file"""
+        try:
+            # Create presets directory if it doesn't exist
+            presets_dir = Path("./presets")
+            presets_dir.mkdir(exist_ok=True)
+            
+            # Create valid filename from preset name
+            # Replace spaces and special chars with underscores
+            filename = "".join(c if c.isalnum() else "_" for c in preset.name) + ".json"
+            file_path = presets_dir / filename
+            
+            # Save preset to file
+            with open(file_path, "w") as f:
+                json.dump(preset.to_dict(), f, indent=4)
+                
+            return True
+        except Exception as e:
+            tk.messagebox.showerror("Error", f"Failed to save preset '{preset.name}': {str(e)}")
+            return False
+
+    def load_presets_file(self):
+        """Load a single preset from a user-selected file"""
+        file_path = filedialog.askopenfilename(
+            title="Load Preset",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
+        )
+        
+        if not file_path:
+            return
+            
+        try:
+            with open(file_path, "r") as f:
+                preset_data = json.load(f)
+                
+            # Convert to CardPreset object
+            new_preset = CardPreset.from_dict(preset_data)
+            
+            # Check if a preset with this name already exists
+            existing_index = None
+            for i, preset in enumerate(self.presets):
+                if preset.name == new_preset.name:
+                    existing_index = i
+                    break
+            
+            if existing_index is not None:
+                # Ask user if they want to replace the existing preset
+                if tk.messagebox.askyesno("Duplicate Name", 
+                                        f"A preset named '{new_preset.name}' already exists. Replace it?"):
+                    self.presets[existing_index] = new_preset
+                    # Save the updated preset
+                    self.save_preset(new_preset)
+                else:
+                    return
+            else:
+                # Add the new preset
+                self.presets.append(new_preset)
+                # Save the new preset
+                self.save_preset(new_preset)
+            
+            # Update UI
+            self.update_presets_list()
+            
+            # Select the new preset
+            if existing_index is not None:
+                self.presets_list.selection_set(existing_index)
+            else:
+                self.presets_list.selection_set(len(self.presets) - 1)
+            
+            self.on_preset_selected(None)
+            self.status_label.config(text=f"Preset '{new_preset.name}' loaded")
+        except Exception as e:
+            tk.messagebox.showerror("Error", f"Failed to load preset: {str(e)}")
+
+    def save_presets(self):
+        """Save all presets to files"""
+        if not self.presets:
+            tk.messagebox.showinfo("No Presets", "No presets to save")
+            return
+        
+        # Create presets directory if it doesn't exist
+        presets_dir = Path("./presets")
+        presets_dir.mkdir(exist_ok=True)
+        
+        # Save each preset to its own file
+        success_count = 0
+        for preset in self.presets:
+            if self.save_preset(preset):
+                success_count += 1
+        
+        self.status_label.config(text=f"{success_count} presets saved")
+
+    def update_presets_list(self):
+        """Update the presets listbox with current presets"""
+        self.presets_list.delete(0, tk.END)
+        
+        for preset in self.presets:
+            self.presets_list.insert(tk.END, preset.name)
+            
+        # Select first preset if available
+        if self.presets and not self.current_preset:
+            self.presets_list.selection_set(0)
+            self.on_preset_selected(None)
+
+    def on_preset_selected(self, event):
+        """Handle preset selection"""
+        if not self.presets:
+            return
+            
+        selection = self.presets_list.curselection()
+        if not selection:
+            return
+            
+        index = selection[0]
+        self.current_preset = self.presets[index]
+        
+        # Update zone labels
+        self.update_zone_info()
+
+    def update_zone_info(self):
+        """Update zone information labels based on current preset"""
+        if not self.current_preset:
+            return
+            
+        # Image zone
+        img_rect = self.current_preset.image_rect
+        self.image_zone_info.config(
+            text=f"X: {img_rect['x']:.2f}%, Y: {img_rect['y']:.2f}%\n"
+                f"W: {img_rect['width']:.2f}%, H: {img_rect['height']:.2f}%"
+        )
+        
+        # Name zone
+        name_rect = self.current_preset.name_rect
+        self.name_zone_info.config(
+            text=f"X: {name_rect['x']:.2f}%, Y: {name_rect['y']:.2f}%\n"
+                f"W: {name_rect['width']:.2f}%, H: {name_rect['height']:.2f}%"
+        )
+        
+        # Type zone
+        type_rect = self.current_preset.type_rect
+        self.type_zone_info.config(
+            text=f"X: {type_rect['x']:.2f}%, Y: {type_rect['y']:.2f}%\n"
+                f"W: {type_rect['width']:.2f}%, H: {type_rect['height']:.2f}%"
+        )
+        
+        # Description zone
+        desc_rect = self.current_preset.description_rect
+        self.description_zone_info.config(
+            text=f"X: {desc_rect['x']:.2f}%, Y: {desc_rect['y']:.2f}%\n"
+                f"W: {desc_rect['width']:.2f}%, H: {desc_rect['height']:.2f}%"
+        )
+
+    def add_preset(self):
+        """Add a new preset"""
+        name = simpledialog.askstring("New Preset", "Enter preset name:")
+        if name:
+            # Check if name already exists
+            if any(p.name == name for p in self.presets):
+                tk.messagebox.showwarning("Duplicate Name", "A preset with this name already exists.")
+                return
+                
+            # Create new preset
+            new_preset = CardPreset(name=name)
+            self.presets.append(new_preset)
+            
+            # Save the new preset
+            self.save_preset(new_preset)
+            
+            # Update UI
+            self.update_presets_list()
+            
+            # Select the new preset
+            self.presets_list.selection_set(len(self.presets) - 1)
+            self.on_preset_selected(None)
+
+    def remove_preset(self):
+        """Remove the selected preset"""
+        if not self.presets:
+            return
+            
+        selection = self.presets_list.curselection()
+        if not selection:
+            tk.messagebox.showinfo("No Selection", "Please select a preset to remove")
+            return
+            
+        index = selection[0]
+        preset_to_remove = self.presets[index]
+        
+        if tk.messagebox.askyesno("Confirm Removal", f"Remove preset '{preset_to_remove.name}'?"):
+            # Try to remove the preset file
+            try:
+                presets_dir = Path("./presets")
+                # Create filename same way as save_preset does
+                filename = "".join(c if c.isalnum() else "_" for c in preset_to_remove.name) + ".json"
+                file_path = presets_dir / filename
+                
+                if file_path.exists():
+                    file_path.unlink()  # Delete the file
+            except Exception as e:
+                print(f"Error removing preset file: {str(e)}")
+            
+            # Remove preset from list
+            del self.presets[index]
+            
+            # Update UI
+            self.update_presets_list()
+            
+            # Reset current preset if none left
+            if not self.presets:
+                self.current_preset = None
+
+    def rename_preset(self):
+        """Rename the selected preset"""
+        if not self.presets:
+            return
+            
+        selection = self.presets_list.curselection()
+        if not selection:
+            tk.messagebox.showinfo("No Selection", "Please select a preset to rename")
+            return
+            
+        index = selection[0]
+        preset_to_rename = self.presets[index]
+        old_name = preset_to_rename.name
+        
+        new_name = simpledialog.askstring("Rename Preset", "Enter new name:", initialvalue=old_name)
+        if new_name and new_name != old_name:
+            # Check if name already exists
+            if any(p.name == new_name for p in self.presets):
+                tk.messagebox.showwarning("Duplicate Name", "A preset with this name already exists.")
+                return
+            
+            # Try to remove the old preset file
+            try:
+                presets_dir = Path("./presets")
+                # Create old filename same way as save_preset does
+                old_filename = "".join(c if c.isalnum() else "_" for c in old_name) + ".json"
+                old_file_path = presets_dir / old_filename
+                
+                if old_file_path.exists():
+                    old_file_path.unlink()  # Delete the old file
+            except Exception as e:
+                print(f"Error removing old preset file: {str(e)}")
+                
+            # Update preset name
+            preset_to_rename.name = new_name
+            
+            # Save with new name
+            self.save_preset(preset_to_rename)
+            
+            # Update UI
+            self.update_presets_list()
+            self.presets_list.selection_set(index)
+
+    def zone_checkbox_changed(self):
+        """Handle zone checkbox state changes"""
+        # This function is called when any zone checkbox is toggled
+        pass
+
+    def set_preset_zone(self, zone_type):
+        """Set the zone coordinates from the current selection"""
+        if not self.current_preset:
+            tk.messagebox.showinfo("No Preset", "Please select or create a preset first")
+            return
+            
+        if not self.selection_coords:
+            tk.messagebox.showinfo("No Selection", "Please make a selection on the image first")
+            return
+            
+        # Convert pixel coordinates to percentage
+        x1, y1, x2, y2 = self.selection_coords
+        x_percent = x1 / self.img_width
+        y_percent = y1 / self.img_height
+        width_percent = (x2 - x1) / self.img_width
+        height_percent = (y2 - y1) / self.img_height
+        
+        # Update the appropriate zone in the current preset
+        if zone_type == "image":
+            self.current_preset.image_rect = {
+                "x": round(x_percent, 2),
+                "y": round(y_percent, 2),
+                "width": round(width_percent, 2),
+                "height": round(height_percent, 2)
+            }
+            # Enable checkbox
+            self.image_zone_var.set(True)
+        elif zone_type == "name":
+            self.current_preset.name_rect = {
+                "x": round(x_percent, 2),
+                "y": round(y_percent, 2),
+                "width": round(width_percent, 2),
+                "height": round(height_percent, 2)
+            }
+            # Enable checkbox
+            self.name_zone_var.set(True)
+        elif zone_type == "type":
+            self.current_preset.type_rect = {
+                "x": round(x_percent, 2),
+                "y": round(y_percent, 2),
+                "width": round(width_percent, 2),
+                "height": round(height_percent, 2)
+            }
+            # Enable checkbox
+            self.type_zone_var.set(True)
+        elif zone_type == "description":
+            self.current_preset.description_rect = {
+                "x": round(x_percent, 2),
+                "y": round(y_percent, 2),
+                "width": round(width_percent, 2),
+                "height": round(height_percent, 2)
+            }
+            # Enable checkbox
+            self.description_zone_var.set(True)
+        
+        # Update zone info display
+        self.update_zone_info()
+        
+        # Reset selection
+        self.reset_selection()
+        
+        self.status_label.config(text=f"{zone_type.capitalize()} zone set")
+        
+        # Save preset after updating
+        self.save_preset(self.current_preset)
+
+    def apply_preset_zone(self, zone_type):
+        """Apply the selected zone from the preset"""
+        if not self.current_preset:
+            tk.messagebox.showinfo("No Preset", "Please select a preset first")
+            return
+        
+        # Get the zone rectangle from the preset
+        if zone_type == "image":
+            if not self.image_zone_var.get():
+                return
+            rect = self.current_preset.image_rect
+            tool = EditorTool.LOAD_IMAGE
+        elif zone_type == "name":
+            if not self.name_zone_var.get():
+                return
+            rect = self.current_preset.name_rect
+            tool = EditorTool.ADD_TEXT
+        elif zone_type == "type":
+            if not self.type_zone_var.get():
+                return
+            rect = self.current_preset.type_rect
+            tool = EditorTool.ADD_TEXT
+        elif zone_type == "description":
+            if not self.description_zone_var.get():
+                return
+            rect = self.current_preset.description_rect
+            tool = EditorTool.ADD_TEXT
+        
+        # Convert percentage to pixel coordinates
+        x1 = int(rect["x"] * self.img_width)
+        y1 = int(rect["y"] * self.img_height)
+        x2 = int((rect["x"] + rect["width"]) * self.img_width)
+        y2 = int((rect["y"] + rect["height"]) * self.img_height)
+        
+        # Set selection coordinates
+        self.selection_coords = (x1, y1, x2, y2)
+        
+        # Draw selection rectangle
+        self.draw_selection_rect()
+        
+        # Change to appropriate tool
+        self.set_tool(tool)
+        
+        # Apply the tool
+        self.apply_tool()
+
+    def process_all_zones(self):
+        """Process all selected zones in sequence"""
+        if not self.current_preset:
+            tk.messagebox.showinfo("No Preset", "Please select a preset first")
+            return
+            
+        zones_to_process = []
+        
+        # Check which zones are selected
+        if self.image_zone_var.get():
+            zones_to_process.append(("image", EditorTool.LOAD_IMAGE))
+        if self.name_zone_var.get():
+            zones_to_process.append(("name", EditorTool.ADD_TEXT))
+        if self.type_zone_var.get():
+            zones_to_process.append(("type", EditorTool.ADD_TEXT))
+        if self.description_zone_var.get():
+            zones_to_process.append(("description", EditorTool.ADD_TEXT))
+        
+        if not zones_to_process:
+            tk.messagebox.showinfo("No Zones Selected", "Please select at least one zone to process")
+            return
+        
+        # Process each zone in sequence
+        for zone_type, tool in zones_to_process:
+            # Apply the zone
+            self.apply_preset_zone(zone_type)
+            
+            # Small delay to allow for user interaction if needed
+            self.root.update()
+        
+        self.status_label.config(text="All selected zones processed")
+
+    def set_preset_zone(self, zone_type):
+        """Set the zone coordinates from the current selection"""
+        if not self.current_preset:
+            tk.messagebox.showinfo("No Preset", "Please select or create a preset first")
+            return
+            
+        if not self.selection_coords:
+            tk.messagebox.showinfo("No Selection", "Please make a selection on the image first")
+            return
+            
+        # Convert pixel coordinates to percentage
+        x1, y1, x2, y2 = self.selection_coords
+        x_percent = x1 / self.img_width
+        y_percent = y1 / self.img_height
+        width_percent = (x2 - x1) / self.img_width
+        height_percent = (y2 - y1) / self.img_height
+        
+        # Update the appropriate zone in the current preset
+        if zone_type == "image":
+            self.current_preset.image_rect = {
+                "x": round(x_percent, 2),
+                "y": round(y_percent, 2),
+                "width": round(width_percent, 2),
+                "height": round(height_percent, 2)
+            }
+            # Enable checkbox
+            self.image_zone_var.set(True)
+        elif zone_type == "name":
+            self.current_preset.name_rect = {
+                "x": round(x_percent, 2),
+                "y": round(y_percent, 2),
+                "width": round(width_percent, 2),
+                "height": round(height_percent, 2)
+            }
+            # Enable checkbox
+            self.name_zone_var.set(True)
+        elif zone_type == "type":
+            self.current_preset.type_rect = {
+                "x": round(x_percent, 2),
+                "y": round(y_percent, 2),
+                "width": round(width_percent, 2),
+                "height": round(height_percent, 2)
+            }
+            # Enable checkbox
+            self.type_zone_var.set(True)
+        elif zone_type == "description":
+            self.current_preset.description_rect = {
+                "x": round(x_percent, 2),
+                "y": round(y_percent, 2),
+                "width": round(width_percent, 2),
+                "height": round(height_percent, 2)
+            }
+            # Enable checkbox
+            self.description_zone_var.set(True)
+        
+        # Update zone info display
+        self.update_zone_info()
+        
+        # Reset selection
+        self.reset_selection()
+        
+        self.status_label.config(text=f"{zone_type.capitalize()} zone set")
+
+    def apply_preset_zone(self, zone_type):
+        """Apply the selected zone from the preset"""
+        if not self.current_preset:
+            tk.messagebox.showinfo("No Preset", "Please select a preset first")
+            return
+        
+        # Get the zone rectangle from the preset
+        if zone_type == "image":
+            if not self.image_zone_var.get():
+                return
+            rect = self.current_preset.image_rect
+            tool = EditorTool.LOAD_IMAGE
+        elif zone_type == "name":
+            if not self.name_zone_var.get():
+                return
+            rect = self.current_preset.name_rect
+            tool = EditorTool.ADD_TEXT
+        elif zone_type == "type":
+            if not self.type_zone_var.get():
+                return
+            rect = self.current_preset.type_rect
+            tool = EditorTool.ADD_TEXT
+        elif zone_type == "description":
+            if not self.description_zone_var.get():
+                return
+            rect = self.current_preset.description_rect
+            tool = EditorTool.ADD_TEXT
+        
+        # Convert percentage to pixel coordinates
+        x1 = int(rect["x"] * self.img_width)
+        y1 = int(rect["y"] * self.img_height)
+        x2 = int((rect["x"] + rect["width"]) * self.img_width)
+        y2 = int((rect["y"] + rect["height"]) * self.img_height)
+        
+        # Set selection coordinates
+        self.selection_coords = (x1, y1, x2, y2)
+        
+        # Draw selection rectangle
+        self.draw_selection_rect()
+        
+        # Change to appropriate tool
+        self.set_tool(tool)
+        
+        # Apply the tool
+        self.apply_tool()
+
+    def process_all_zones(self):
+        """Process all selected zones in sequence"""
+        if not self.current_preset:
+            tk.messagebox.showinfo("No Preset", "Please select a preset first")
+            return
+            
+        zones_to_process = []
+        
+        # Check which zones are selected
+        if self.image_zone_var.get():
+            zones_to_process.append(("image", EditorTool.LOAD_IMAGE))
+        if self.name_zone_var.get():
+            zones_to_process.append(("name", EditorTool.ADD_TEXT))
+        if self.type_zone_var.get():
+            zones_to_process.append(("type", EditorTool.ADD_TEXT))
+        if self.description_zone_var.get():
+            zones_to_process.append(("description", EditorTool.ADD_TEXT))
+        
+        if not zones_to_process:
+            tk.messagebox.showinfo("No Zones Selected", "Please select at least one zone to process")
+            return
+        
+        # Process each zone in sequence
+        for zone_type, tool in zones_to_process:
+            # Apply the zone
+            self.apply_preset_zone(zone_type)
+            
+            # Small delay to allow for user interaction if needed
+            self.root.update()
+        
+        self.status_label.config(text="All selected zones processed")
+
+    def create_presets_panel(self):
+        """Create the presets panel on the right side"""
+        self.presets_panel = ttk.Frame(self.root, width=200)
+        self.presets_panel.grid(row=0, column=2, sticky="ns", padx=5, pady=5)
+        
+        # Presets title
+        presets_title = ttk.Label(self.presets_panel, text="Presets", font=("Arial", 12, "bold"))
+        presets_title.pack(fill="x", pady=5)
+        
+        # Presets selection frame
+        presets_frame = ttk.LabelFrame(self.presets_panel, text="Available Presets")
+        presets_frame.pack(fill="x", padx=5, pady=5)
+        
+        # Presets listbox
+        self.presets_list = tk.Listbox(presets_frame, height=6)
+        self.presets_list.pack(fill="x", padx=5, pady=5)
+        self.presets_list.bind("<<ListboxSelect>>", self.on_preset_selected)
+        
+        # Preset management buttons
+        preset_buttons_frame = ttk.Frame(presets_frame)
+        preset_buttons_frame.pack(fill="x", padx=5, pady=5)
+        
+        ttk.Button(preset_buttons_frame, text="Add", command=self.add_preset).pack(side=tk.LEFT, padx=2)
+        ttk.Button(preset_buttons_frame, text="Remove", command=self.remove_preset).pack(side=tk.LEFT, padx=2)
+        ttk.Button(preset_buttons_frame, text="Rename", command=self.rename_preset).pack(side=tk.LEFT, padx=2)
+        
+        # Separator
+        ttk.Separator(self.presets_panel, orient=tk.HORIZONTAL).pack(fill="x", padx=5, pady=10)
+        
+        # Rectangle zones frame
+        zones_frame = ttk.LabelFrame(self.presets_panel, text="Card Zones")
+        zones_frame.pack(fill="x", padx=5, pady=5)
+        
+        # Image zone
+        self.image_zone_var = tk.BooleanVar(value=False)
+        self.image_zone_frame = ttk.Frame(zones_frame)
+        self.image_zone_frame.pack(fill="x", padx=5, pady=5)
+        
+        ttk.Checkbutton(self.image_zone_frame, text="Image Zone", variable=self.image_zone_var, 
+                    command=self.zone_checkbox_changed).pack(anchor="w")
+        
+        self.image_zone_info = ttk.Label(self.image_zone_frame, text="Not configured")
+        self.image_zone_info.pack(anchor="w", padx=20)
+        
+        ttk.Button(self.image_zone_frame, text="Set", command=lambda: self.set_preset_zone("image")).pack(anchor="w", padx=20)
+        ttk.Button(self.image_zone_frame, text="Apply", command=lambda: self.apply_preset_zone("image")).pack(anchor="w", padx=20)
+        
+        # Name zone
+        self.name_zone_var = tk.BooleanVar(value=False)
+        self.name_zone_frame = ttk.Frame(zones_frame)
+        self.name_zone_frame.pack(fill="x", padx=5, pady=5)
+        
+        ttk.Checkbutton(self.name_zone_frame, text="Name Zone", variable=self.name_zone_var,
+                    command=self.zone_checkbox_changed).pack(anchor="w")
+        
+        self.name_zone_info = ttk.Label(self.name_zone_frame, text="Not configured")
+        self.name_zone_info.pack(anchor="w", padx=20)
+        
+        ttk.Button(self.name_zone_frame, text="Set", command=lambda: self.set_preset_zone("name")).pack(anchor="w", padx=20)
+        ttk.Button(self.name_zone_frame, text="Apply", command=lambda: self.apply_preset_zone("name")).pack(anchor="w", padx=20)
+        
+        # Type zone
+        self.type_zone_var = tk.BooleanVar(value=False)
+        self.type_zone_frame = ttk.Frame(zones_frame)
+        self.type_zone_frame.pack(fill="x", padx=5, pady=5)
+        
+        ttk.Checkbutton(self.type_zone_frame, text="Type Zone", variable=self.type_zone_var,
+                    command=self.zone_checkbox_changed).pack(anchor="w")
+        
+        self.type_zone_info = ttk.Label(self.type_zone_frame, text="Not configured")
+        self.type_zone_info.pack(anchor="w", padx=20)
+        
+        ttk.Button(self.type_zone_frame, text="Set", command=lambda: self.set_preset_zone("type")).pack(anchor="w", padx=20)
+        ttk.Button(self.type_zone_frame, text="Apply", command=lambda: self.apply_preset_zone("type")).pack(anchor="w", padx=20)
+        
+        # Description zone
+        self.description_zone_var = tk.BooleanVar(value=False)
+        self.description_zone_frame = ttk.Frame(zones_frame)
+        self.description_zone_frame.pack(fill="x", padx=5, pady=5)
+        
+        ttk.Checkbutton(self.description_zone_frame, text="Description Zone", variable=self.description_zone_var,
+                    command=self.zone_checkbox_changed).pack(anchor="w")
+        
+        self.description_zone_info = ttk.Label(self.description_zone_frame, text="Not configured")
+        self.description_zone_info.pack(anchor="w", padx=20)
+        
+        ttk.Button(self.description_zone_frame, text="Set", command=lambda: self.set_preset_zone("description")).pack(anchor="w", padx=20)
+        ttk.Button(self.description_zone_frame, text="Apply", command=lambda: self.apply_preset_zone("description")).pack(anchor="w", padx=20)
+        
+        # Batch process button
+        ttk.Button(self.presets_panel, text="Process All Selected Zones", command=self.process_all_zones).pack(fill="x", padx=5, pady=10)
+        
+        # Save and load presets
+        presets_file_frame = ttk.Frame(self.presets_panel)
+        presets_file_frame.pack(fill="x", padx=5, pady=5)
+        
+        ttk.Button(presets_file_frame, text="Save Presets", command=self.save_presets).pack(side=tk.LEFT, padx=2)
+        ttk.Button(presets_file_frame, text="Load Presets", command=self.load_presets_file).pack(side=tk.LEFT, padx=2)
+
     def create_toolbar(self):
         """Create the toolbar with editing tools"""
         self.toolbar = ttk.Frame(self.root, width=150)

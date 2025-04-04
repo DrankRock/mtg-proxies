@@ -1,0 +1,27 @@
+{
+    "name": "Normal mtg card",
+    "image_rect": {
+        "x": 0.1,
+        "y": 0.2,
+        "width": 0.8,
+        "height": 0.5
+    },
+    "name_rect": {
+        "x": 0.1,
+        "y": 0.05,
+        "width": 0.8,
+        "height": 0.1
+    },
+    "type_rect": {
+        "x": 0.1,
+        "y": 0.75,
+        "width": 0.8,
+        "height": 0.08
+    },
+    "description_rect": {
+        "x": 0.1,
+        "y": 0.85,
+        "width": 0.8,
+        "height": 0.12
+    }
+}
