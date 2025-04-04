@@ -72,7 +72,8 @@ class CardEditor:
         self.coords_label.pack(side=tk.RIGHT, padx=5)
         
         # Set initial tool
-        self.current_tool = EditorTool.PAN
+        self.current_tool = EditorTool.CONTENT_AWARE_FILL
+        self.selected_tool_button = None  # Track the currently selected tool button
         
         # Drawing state
         self.start_x = None
@@ -90,6 +91,9 @@ class CardEditor:
         
         # Display the image
         self.update_display()
+        
+        # Initialize with PAN tool selected
+        self.set_tool(EditorTool.PAN)
         
     def create_toolbar(self):
         """Create the toolbar with editing tools"""
@@ -123,22 +127,23 @@ class CardEditor:
         tools_frame = ttk.LabelFrame(self.toolbar, text="Tools")
         tools_frame.pack(fill="x", padx=5, pady=5)
         
-        self.select_btn = ttk.Button(tools_frame, text="Select", command=lambda: self.set_tool(EditorTool.SELECT))
+        # Using tk.Button instead of ttk.Button for better border control
+        self.select_btn = tk.Button(tools_frame, text="Select", command=lambda: self.set_tool(EditorTool.SELECT))
         self.select_btn.pack(fill="x", pady=2)
         
-        self.pan_btn = ttk.Button(tools_frame, text="Pan", command=lambda: self.set_tool(EditorTool.PAN))
+        self.pan_btn = tk.Button(tools_frame, text="Pan", command=lambda: self.set_tool(EditorTool.PAN))
         self.pan_btn.pack(fill="x", pady=2)
         
-        self.fill_btn = ttk.Button(tools_frame, text="Content-Aware Fill", 
-                                   command=lambda: self.set_tool(EditorTool.CONTENT_AWARE_FILL))
+        self.fill_btn = tk.Button(tools_frame, text="Content-Aware Fill", 
+                                 command=lambda: self.set_tool(EditorTool.CONTENT_AWARE_FILL))
         self.fill_btn.pack(fill="x", pady=2)
         
-        self.text_btn = ttk.Button(tools_frame, text="Add Text", 
-                                  command=lambda: self.set_tool(EditorTool.ADD_TEXT))
+        self.text_btn = tk.Button(tools_frame, text="Add Text", 
+                                command=lambda: self.set_tool(EditorTool.ADD_TEXT))
         self.text_btn.pack(fill="x", pady=2)
         
-        self.image_btn = ttk.Button(tools_frame, text="Load Image", 
-                                   command=lambda: self.set_tool(EditorTool.LOAD_IMAGE))
+        self.image_btn = tk.Button(tools_frame, text="Load Image", 
+                                 command=lambda: self.set_tool(EditorTool.LOAD_IMAGE))
         self.image_btn.pack(fill="x", pady=2)
         
         # Action buttons separator
@@ -196,6 +201,26 @@ class CardEditor:
         self.status_label.config(text=f"Current tool: {tool.name}")
         self.reset_selection()
         
+        # Remove border from previously selected button
+        if self.selected_tool_button:
+            self.selected_tool_button.config(borderwidth=1, relief="raised")
+        
+        # Add border to newly selected button
+        if tool == EditorTool.SELECT:
+            self.selected_tool_button = self.select_btn
+        elif tool == EditorTool.PAN:
+            self.selected_tool_button = self.pan_btn
+        elif tool == EditorTool.CONTENT_AWARE_FILL:
+            self.selected_tool_button = self.fill_btn
+        elif tool == EditorTool.ADD_TEXT:
+            self.selected_tool_button = self.text_btn
+        elif tool == EditorTool.LOAD_IMAGE:
+            self.selected_tool_button = self.image_btn
+        
+        # Set border on new button
+        if self.selected_tool_button:
+            self.selected_tool_button.config(borderwidth=2, relief="solid")
+    
     def update_display(self):
         """Update the canvas with the current image"""
         # Apply zoom
@@ -288,11 +313,11 @@ class CardEditor:
             if (x2 - x1) >= 5 and (y2 - y1) >= 5:
                 self.selection_coords = (int(x1), int(y1), int(x2), int(y2))
                 
-                # If tool is add text, show text dialog right away
-                if self.current_tool == EditorTool.ADD_TEXT:
+                # Automatically trigger appropriate action based on the selected tool
+                if self.current_tool == EditorTool.CONTENT_AWARE_FILL:
+                    self.apply_content_aware_fill()  # Auto-apply content-aware fill
+                elif self.current_tool == EditorTool.ADD_TEXT:
                     self.add_text_to_selection()
-                
-                # If tool is load image, show file dialog right away
                 elif self.current_tool == EditorTool.LOAD_IMAGE:
                     self.load_image_to_selection()
             else:
