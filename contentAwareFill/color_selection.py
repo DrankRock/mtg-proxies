@@ -100,6 +100,162 @@ class ColorSelectionMixin:
         self.color_mask = None
         self.selection_preview_timer = None
 
+    # Modify the update_selection_preview method to work with zoom:
+    def update_selection_preview(self, preview_img, crop_coords=None):
+        """Update the preview with the color-based selection overlay
+
+        Args:
+            preview_img: PIL Image with the preview
+            crop_coords: List of [x1, y1, x2, y2] coordinates of the crop
+        """
+        self.status_label.config(text="Color selection preview ready")
+
+        # Store the crop coordinates if provided
+        if crop_coords:
+            self.preview_crop_coords = crop_coords
+
+        # Update the preview if available
+        if self.preview_var.get() and hasattr(self, "preview_canvas"):
+            # Scale the preview to fit the canvas
+            preview_width = self.preview_canvas.winfo_width() - 10
+            if preview_width < 100:  # If canvas not yet sized, use a default
+                preview_width = 300
+
+            # Calculate aspect ratio and preview size
+            aspect_ratio = preview_img.height / preview_img.width
+            preview_height = int(preview_width * aspect_ratio)
+
+            # Resize for preview
+            preview_img_resized = preview_img.resize((preview_width, preview_height), Image.LANCZOS)
+
+            # Create image for canvas
+            self.selection_preview_photo = ImageTk.PhotoImage(preview_img_resized)
+
+            # Update canvas
+            self.preview_canvas.delete("all")
+
+            # Configure canvas scrollregion for the zoomed image
+            zoomed_width = int(self.selection_preview_photo.width() * self.zoom_level)
+            zoomed_height = int(self.selection_preview_photo.height() * self.zoom_level)
+            self.preview_canvas.config(scrollregion=(0, 0, zoomed_width, zoomed_height))
+
+            # Draw the image with a tag for scaling
+            self.image_item = self.preview_canvas.create_image(
+                0, 0, anchor="nw", image=self.selection_preview_photo, tags=("preview_image",)
+            )
+
+            # Scale the image if zoomed
+            if self.zoom_level != 1.0:
+                self.preview_canvas.scale("preview_image", 0, 0, self.zoom_level, self.zoom_level)
+
+            self.preview_status.config(
+                text=f"Selection preview - apply to confirm (Zoom: {int(self.zoom_level * 100)}%)"
+            )
+
+            # Store this preview for color picking
+            self.before_preview = preview_img
+
+    def apply_color_selection(self):
+        """Apply the color-based selection to update the selection coordinates"""
+        if not hasattr(self, "color_mask") or self.color_mask is None:
+            self.status_label.config(text="No color selection to apply. Pick a color first.")
+            return
+
+        # Get the original selection coordinates
+        orig_x1, orig_y1, orig_x2, orig_y2 = self.selection_coords
+
+        # Find the bounding rectangle of the mask within the current selection
+        y_indices, x_indices = np.where(self.color_mask > 0)
+
+        if len(y_indices) == 0 or len(x_indices) == 0:
+            self.status_label.config(text="No pixels selected with current settings. Try increasing tolerance.")
+            return
+
+        # We don't need to update the selection coordinates, since we're using the mask
+        # to determine what gets filled, not creating a new rectangular selection
+
+        # Store the color mask for use during inpainting
+        self.use_color_mask = True
+
+        # Display the number of pixels selected and the percentage of the original selection
+        pixel_count = np.sum(self.color_mask > 0)
+        original_area = (orig_x2 - orig_x1) * (orig_y2 - orig_y1)
+        percentage = (pixel_count / original_area) * 100 if original_area > 0 else 0
+
+        self.status_label.config(text=f"Color selection applied: {pixel_count} pixels ({percentage:.1f}% of selection)")
+
+        # Update the preview if preview is enabled
+        if hasattr(self, "preview_var") and self.preview_var.get():
+            self.update_preview()
+
+    def reset_color_selection(self):
+        """Reset to the original rectangular selection"""
+        if hasattr(self, "original_selection_coords"):
+            # Store the original coordinates
+            self.selection_coords = self.original_selection_coords
+
+            # Clear the color mask
+            self.color_mask = None
+            self.use_color_mask = False
+
+            self.status_label.config(text="Selection reset to original rectangle")
+
+            # Update the preview if enabled
+            if hasattr(self, "preview_var") and self.preview_var.get():
+                self.update_preview()
+
+    def apply_opencv_inpainting_with_color_mask(self, image, preview=False):
+        """Apply OpenCV inpainting algorithm with color-based mask
+
+        Args:
+            image: PIL Image to process
+            preview: Whether this is for preview (lower quality for speed)
+
+        Returns:
+            PIL Image with inpainting applied
+        """
+        # Convert PIL image to OpenCV format
+        img_cv = np.array(image)
+        # Convert RGB to BGR (OpenCV uses BGR)
+        img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
+
+        # Get selection coordinates
+        x1, y1, x2, y2 = self.selection_coords
+
+        # Ensure coordinates are within bounds
+        x1 = max(0, min(x1, image.width - 1))
+        y1 = max(0, min(y1, image.height - 1))
+        x2 = max(0, min(x2, image.width))
+        y2 = max(0, min(y2, image.height))
+
+        # Create mask for inpainting
+        if hasattr(self, "use_color_mask") and self.use_color_mask and self.color_mask is not None:
+            # Use the color-based mask directly
+            mask = self.color_mask
+        else:
+            # Use the traditional rectangular mask
+            mask = np.zeros((image.height, image.width), dtype=np.uint8)
+            mask[y1:y2, x1:x2] = 255
+
+        # If feathering is enabled, create a soft mask
+        feather = self.feather_edge_var.get()
+        if feather > 0:
+            # Apply blur to create feathered edges
+            mask = cv2.GaussianBlur(mask, (feather * 2 + 1, feather * 2 + 1), 0)
+
+        # Get inpainting radius
+        inpaint_radius = self.radius_var.get()
+
+        # Apply appropriate inpainting algorithm
+        if self.algorithm_var.get() == "opencv_telea":
+            result = cv2.inpaint(img_cv, mask, inpaint_radius, cv2.INPAINT_TELEA)
+        else:  # opencv_ns
+            result = cv2.inpaint(img_cv, mask, inpaint_radius, cv2.INPAINT_NS)
+
+        # Convert back to RGB and PIL format
+        result_rgb = cv2.cvtColor(result.astype(np.uint8), cv2.COLOR_BGR2RGB)
+        return Image.fromarray(result_rgb)
+
     def on_slider_change(self, value, var):
         """Handle slider changes with debounce and integer-only values"""
         # Convert to integer
@@ -121,6 +277,7 @@ class ColorSelectionMixin:
             # Set a new timer
             self.selection_preview_timer = self.fill_dialog.after(300, self.preview_color_selection)
 
+    # Modify activate_color_selection method in ColorSelectionMixin
     def activate_color_selection(self):
         """Activate the color selection tool within the preview image"""
         if self.color_selection_active:
@@ -142,7 +299,11 @@ class ColorSelectionMixin:
         # Change cursor and show instruction
         self.fill_dialog.grab_release()  # Allow interaction with dialog elements
         self.preview_canvas.config(cursor="crosshair")
-        self.status_label.config(text="Click on preview image to select color for masking")
+        self.status_label.config(text="Click on preview image to select color for masking (showing original image)")
+
+        # If we have toggle_eyedropper_mode function, call it to disable panning
+        if hasattr(self, "toggle_eyedropper_mode"):
+            self.toggle_eyedropper_mode(True)
 
         # Store original bindings
         try:
@@ -151,20 +312,29 @@ class ColorSelectionMixin:
             # If there's no binding yet
             self.original_preview_click = ""
 
+        # Temporarily show the original image for color selection
+        if hasattr(self, "image_item") and hasattr(self, "before_photo"):
+            self.preview_canvas.itemconfig(self.image_item, image=self.before_photo)
+
         # Create new binding for color picking
         def pick_selection_color(event):
             if not self.color_selection_active:
                 return
 
             try:
-                # Get the current preview image
+                # Get the current preview image - use original image
                 if not hasattr(self, "before_preview") or self.before_preview is None:
-                    self.status_label.config(text="Preview image not available")
+                    self.status_label.config(text="Original image not available")
                     return
 
                 # Get coordinates within the preview
-                preview_x = event.x
-                preview_y = event.y
+                # Need to account for canvas scrolling and zooming
+                canvas_x = self.preview_canvas.canvasx(event.x)
+                canvas_y = self.preview_canvas.canvasy(event.y)
+
+                # Apply inverse zoom to get the actual image coordinates
+                preview_x = int(canvas_x / self.zoom_level)
+                preview_y = int(canvas_y / self.zoom_level)
 
                 # Check if within preview bounds
                 if 0 <= preview_x < self.before_preview.width and 0 <= preview_y < self.before_preview.height:
@@ -179,7 +349,7 @@ class ColorSelectionMixin:
                     orig_x = int(x1 + prop_x * (x2 - x1))
                     orig_y = int(y1 + prop_y * (y2 - y1))
 
-                    # Get color at this position
+                    # Get color from ORIGINAL image, not the filled one
                     orig_rgb = self.editor.working_image.getpixel((orig_x, orig_y))
 
                     # Ensure we have RGB values
@@ -204,9 +374,18 @@ class ColorSelectionMixin:
                     self.preview_canvas.config(cursor="")
                     self.color_selection_active = False
 
+                    # Re-enable panning
+                    if hasattr(self, "toggle_eyedropper_mode"):
+                        self.toggle_eyedropper_mode(False)
+
                     # Restore original binding if it exists
                     if self.original_preview_click:
                         self.preview_canvas.bind("<Button-1>", self.original_preview_click)
+
+                    # Restore the after image display if appropriate
+                    if not getattr(self, "is_hovering", False):
+                        if hasattr(self, "image_item") and hasattr(self, "preview_photo"):
+                            self.preview_canvas.itemconfig(self.image_item, image=self.preview_photo)
 
                     self.status_label.config(text="Color selected for masking")
 
@@ -218,6 +397,15 @@ class ColorSelectionMixin:
                 traceback.print_exc()
                 self.status_label.config(text=f"Error selecting color: {str(e)}")
                 self.color_selection_active = False
+
+                # Re-enable panning on error
+                if hasattr(self, "toggle_eyedropper_mode"):
+                    self.toggle_eyedropper_mode(False)
+
+                # Restore the after image display
+                if not getattr(self, "is_hovering", False):
+                    if hasattr(self, "image_item") and hasattr(self, "preview_photo"):
+                        self.preview_canvas.itemconfig(self.image_item, image=self.preview_photo)
 
         # Set temporary binding
         self.preview_canvas.bind("<Button-1>", pick_selection_color)
@@ -347,146 +535,3 @@ class ColorSelectionMixin:
         thread = threading.Thread(target=process_preview)
         thread.daemon = True
         thread.start()
-
-    def update_selection_preview(self, preview_img, crop_coords=None):
-        """Update the preview with the color-based selection overlay
-
-        Args:
-            preview_img: PIL Image with the preview
-            crop_coords: List of [x1, y1, x2, y2] coordinates of the crop
-        """
-        self.status_label.config(text="Color selection preview ready")
-
-        # Store the crop coordinates if provided
-        if crop_coords:
-            self.preview_crop_coords = crop_coords
-
-        # Update the preview if available
-        if self.preview_var.get() and hasattr(self, "preview_canvas"):
-            # Scale the preview to fit the canvas
-            preview_width = self.preview_canvas.winfo_width() - 10
-            if preview_width < 100:  # If canvas not yet sized, use a default
-                preview_width = 300
-
-            # Calculate aspect ratio and preview size
-            aspect_ratio = preview_img.height / preview_img.width
-            preview_height = int(preview_width * aspect_ratio)
-
-            # Resize for preview
-            preview_img_resized = preview_img.resize((preview_width, preview_height), Image.LANCZOS)
-
-            # Create image for canvas
-            self.selection_preview_photo = ImageTk.PhotoImage(preview_img_resized)
-
-            # Update canvas
-            self.preview_canvas.delete("all")
-            self.preview_canvas.config(
-                width=self.selection_preview_photo.width(), height=self.selection_preview_photo.height()
-            )
-            self.preview_canvas.create_image(0, 0, anchor="nw", image=self.selection_preview_photo)
-
-            self.preview_status.config(text="Selection preview - apply to confirm")
-
-            # Store this preview for color picking
-            self.before_preview = preview_img
-
-    def apply_color_selection(self):
-        """Apply the color-based selection to update the selection coordinates"""
-        if not hasattr(self, "color_mask") or self.color_mask is None:
-            self.status_label.config(text="No color selection to apply. Pick a color first.")
-            return
-
-        # Get the original selection coordinates
-        orig_x1, orig_y1, orig_x2, orig_y2 = self.selection_coords
-
-        # Find the bounding rectangle of the mask within the current selection
-        y_indices, x_indices = np.where(self.color_mask > 0)
-
-        if len(y_indices) == 0 or len(x_indices) == 0:
-            self.status_label.config(text="No pixels selected with current settings. Try increasing tolerance.")
-            return
-
-        # We don't need to update the selection coordinates, since we're using the mask
-        # to determine what gets filled, not creating a new rectangular selection
-
-        # Store the color mask for use during inpainting
-        self.use_color_mask = True
-
-        # Display the number of pixels selected and the percentage of the original selection
-        pixel_count = np.sum(self.color_mask > 0)
-        original_area = (orig_x2 - orig_x1) * (orig_y2 - orig_y1)
-        percentage = (pixel_count / original_area) * 100 if original_area > 0 else 0
-
-        self.status_label.config(text=f"Color selection applied: {pixel_count} pixels ({percentage:.1f}% of selection)")
-
-        # Update the preview if preview is enabled
-        if hasattr(self, "preview_var") and self.preview_var.get():
-            self.update_preview()
-
-    def reset_color_selection(self):
-        """Reset to the original rectangular selection"""
-        if hasattr(self, "original_selection_coords"):
-            # Store the original coordinates
-            self.selection_coords = self.original_selection_coords
-
-            # Clear the color mask
-            self.color_mask = None
-            self.use_color_mask = False
-
-            self.status_label.config(text="Selection reset to original rectangle")
-
-            # Update the preview if enabled
-            if hasattr(self, "preview_var") and self.preview_var.get():
-                self.update_preview()
-
-    def apply_opencv_inpainting_with_color_mask(self, image, preview=False):
-        """Apply OpenCV inpainting algorithm with color-based mask
-
-        Args:
-            image: PIL Image to process
-            preview: Whether this is for preview (lower quality for speed)
-
-        Returns:
-            PIL Image with inpainting applied
-        """
-        # Convert PIL image to OpenCV format
-        img_cv = np.array(image)
-        # Convert RGB to BGR (OpenCV uses BGR)
-        img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
-
-        # Get selection coordinates
-        x1, y1, x2, y2 = self.selection_coords
-
-        # Ensure coordinates are within bounds
-        x1 = max(0, min(x1, image.width - 1))
-        y1 = max(0, min(y1, image.height - 1))
-        x2 = max(0, min(x2, image.width))
-        y2 = max(0, min(y2, image.height))
-
-        # Create mask for inpainting
-        if hasattr(self, "use_color_mask") and self.use_color_mask and self.color_mask is not None:
-            # Use the color-based mask directly
-            mask = self.color_mask
-        else:
-            # Use the traditional rectangular mask
-            mask = np.zeros((image.height, image.width), dtype=np.uint8)
-            mask[y1:y2, x1:x2] = 255
-
-        # If feathering is enabled, create a soft mask
-        feather = self.feather_edge_var.get()
-        if feather > 0:
-            # Apply blur to create feathered edges
-            mask = cv2.GaussianBlur(mask, (feather * 2 + 1, feather * 2 + 1), 0)
-
-        # Get inpainting radius
-        inpaint_radius = self.radius_var.get()
-
-        # Apply appropriate inpainting algorithm
-        if self.algorithm_var.get() == "opencv_telea":
-            result = cv2.inpaint(img_cv, mask, inpaint_radius, cv2.INPAINT_TELEA)
-        else:  # opencv_ns
-            result = cv2.inpaint(img_cv, mask, inpaint_radius, cv2.INPAINT_NS)
-
-        # Convert back to RGB and PIL format
-        result_rgb = cv2.cvtColor(result.astype(np.uint8), cv2.COLOR_BGR2RGB)
-        return Image.fromarray(result_rgb)

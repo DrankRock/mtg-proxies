@@ -53,13 +53,18 @@ class EnhancedContentAwareFill(
         # Variables
         self.color_var = tk.StringVar(value="#000000")
         self.influence_var = tk.DoubleVar(value=0.0)  # 0 = pure inpainting, 1 = pure color
-        self.algorithm_var = tk.StringVar(value="opencv_telea")
+        self.algorithm_var = tk.StringVar(value="none")  # Changed default to "none"
         self.radius_var = tk.IntVar(value=5)
         self.preview_var = tk.BooleanVar(value=True)
         self.patch_size_var = tk.IntVar(value=5)
         self.search_area_var = tk.IntVar(value=15)
         self.feather_edge_var = tk.IntVar(value=2)
         self.eyedropper_active = False
+
+        # Initialize zoom level
+        self.zoom_level = 1.0
+        self.is_hovering = False
+        self.is_panning = False
 
         # Preview image reference
         self.preview_image = None
@@ -98,7 +103,7 @@ class EnhancedContentAwareFill(
 
         # Preview controls
         preview_controls = ttk.Frame(preview_frame)
-        preview_controls.pack(fill="x", pady=(0, 10))
+        preview_controls.pack(fill="x", pady=(0, 5))
 
         ttk.Checkbutton(
             preview_controls, text="Live preview", variable=self.preview_var, command=self.toggle_preview
@@ -107,13 +112,114 @@ class EnhancedContentAwareFill(
         self.preview_status = ttk.Label(preview_controls, text="")
         self.preview_status.pack(side=tk.RIGHT)
 
-        # Preview canvas
-        self.preview_canvas = tk.Canvas(preview_frame, bg="gray", width=300, height=300)
-        self.preview_canvas.pack(fill="both", expand=True)
+        # Zoom controls
+        zoom_controls = ttk.Frame(preview_frame)
+        zoom_controls.pack(fill="x", pady=(0, 5))
+
+        ttk.Button(zoom_controls, text="🔍-", width=3, command=lambda: self.zoom_preview(0.8)).pack(
+            side=tk.LEFT, padx=2
+        )
+        ttk.Button(zoom_controls, text="Reset", command=lambda: self.zoom_preview(1.0)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(zoom_controls, text="🔍+", width=3, command=lambda: self.zoom_preview(1.25)).pack(
+            side=tk.LEFT, padx=2
+        )
+
+        self.zoom_percentage = ttk.Label(zoom_controls, text="100%")
+        self.zoom_percentage.pack(side=tk.LEFT, padx=(10, 0))
+
+        # Preview canvas with scrollbars
+        preview_canvas_frame = ttk.Frame(preview_frame)
+        preview_canvas_frame.pack(fill="both", expand=True)
+
+        # Store the frame reference for size calculations
+        self.preview_frame = preview_canvas_frame
+
+        # Create horizontal and vertical scrollbars
+        h_scrollbar = ttk.Scrollbar(preview_canvas_frame, orient="horizontal")
+        v_scrollbar = ttk.Scrollbar(preview_canvas_frame, orient="vertical")
+        h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
+        v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Create canvas with scrollbar attachment
+        self.preview_canvas = tk.Canvas(
+            preview_canvas_frame,
+            bg="gray",
+            width=800,
+            height=300,
+            xscrollcommand=h_scrollbar.set,
+            yscrollcommand=v_scrollbar.set,
+        )
+        self.preview_canvas.pack(side=tk.LEFT, fill="both", expand=True)
+
+        # Configure scrollbars to scroll the canvas
+        h_scrollbar.config(command=self.preview_canvas.xview)
+        v_scrollbar.config(command=self.preview_canvas.yview)
+
+        # Add mouse wheel zoom functionality
+        def on_mousewheel(event):
+            if event.state & 0x4:  # Check if Ctrl key is pressed
+                # Ctrl + mousewheel for zooming
+                if event.delta > 0:
+                    self.zoom_preview(1.1)  # Zoom in
+                else:
+                    self.zoom_preview(0.9)  # Zoom out
+                return "break"  # Prevent default scrolling
+
+        self.preview_canvas.bind("<MouseWheel>", on_mousewheel)  # Windows
+        self.preview_canvas.bind("<Button-4>", lambda e: self.zoom_preview(1.1))  # Linux - scroll up
+        self.preview_canvas.bind("<Button-5>", lambda e: self.zoom_preview(0.9))  # Linux - scroll down
+
+        # Define panning functions and bind them
+        def start_pan(event):
+            self.is_panning = True
+            self.preview_canvas.scan_mark(event.x, event.y)
+            # Remember hover state
+            self.hover_state_before_pan = getattr(self, "is_hovering", False)
+
+        def do_pan(event):
+            if self.is_panning:
+                self.preview_canvas.scan_dragto(event.x, event.y, gain=1)
+
+        def end_pan(event):
+            if self.is_panning:
+                self.is_panning = False
+                # Update hover state based on mouse position
+                x, y = self.preview_canvas.winfo_pointerxy()
+                canvas_x, canvas_y = self.preview_canvas.winfo_rootx(), self.preview_canvas.winfo_rooty()
+                canvas_width, canvas_height = self.preview_canvas.winfo_width(), self.preview_canvas.winfo_height()
+
+                if canvas_x <= x < canvas_x + canvas_width and canvas_y <= y < canvas_y + canvas_height:
+                    # Mouse is over canvas
+                    if (
+                        not getattr(self, "is_hovering", False)
+                        and hasattr(self, "image_item")
+                        and hasattr(self, "before_photo")
+                    ):
+                        self.preview_canvas.itemconfig(self.image_item, image=self.before_photo)
+                        self.is_hovering = True
+                else:
+                    # Mouse is outside canvas
+                    if (
+                        getattr(self, "is_hovering", False)
+                        and hasattr(self, "image_item")
+                        and hasattr(self, "preview_photo")
+                    ):
+                        self.preview_canvas.itemconfig(self.image_item, image=self.preview_photo)
+                        self.is_hovering = False
+
+        # Store panning functions as instance methods
+        self.start_pan = start_pan
+        self.do_pan = do_pan
+        self.end_pan = end_pan
+
+        # Bind panning events
+        self.preview_canvas.bind("<ButtonPress-1>", start_pan)
+        self.preview_canvas.bind("<B1-Motion>", do_pan)
+        self.preview_canvas.bind("<ButtonRelease-1>", end_pan)
 
         # Add "Before/After" label
         ttk.Label(preview_frame, text="Before/After (hover to compare)", foreground="blue").pack(
-            anchor="w", pady=(10, 0)
+            anchor="w", pady=(5, 0)
         )
 
         # Settings column
@@ -125,6 +231,14 @@ class EnhancedContentAwareFill(
         algorithm_frame = ttk.LabelFrame(frame, text="Algorithm Selection", padding=10)
         algorithm_frame.grid(row=row, column=0, sticky="ew", pady=10)
         row += 1
+
+        ttk.Radiobutton(
+            algorithm_frame,
+            text="None (Original Image)",
+            variable=self.algorithm_var,
+            value="none",
+            command=self.update_ui_for_algorithm,
+        ).pack(anchor="w", pady=2)
 
         # Traditional algorithms
         ttk.Radiobutton(
@@ -140,14 +254,6 @@ class EnhancedContentAwareFill(
             text="OpenCV NS (Better Quality)",
             variable=self.algorithm_var,
             value="opencv_ns",
-            command=self.update_ui_for_algorithm,
-        ).pack(anchor="w", pady=2)
-
-        ttk.Radiobutton(
-            algorithm_frame,
-            text="Patch-Based Filling (Texture Preservation)",
-            variable=self.algorithm_var,
-            value="patch_based",
             command=self.update_ui_for_algorithm,
         ).pack(anchor="w", pady=2)
 

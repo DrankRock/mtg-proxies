@@ -20,7 +20,15 @@ class UIHandlersMixin:
 
         algorithm = self.algorithm_var.get()
 
-        if algorithm in ["opencv_telea", "opencv_ns"]:
+        if algorithm == "none":
+            # No settings needed for "None" option
+            ttk.Label(
+                self.algorithm_settings_frame,
+                text="No algorithm selected - original image will be displayed",
+                foreground="blue",
+            ).grid(row=0, column=0, columnspan=2, sticky="w", pady=5)
+
+        elif algorithm in ["opencv_telea", "opencv_ns"]:
             # OpenCV settings
             ttk.Label(self.algorithm_settings_frame, text="Inpainting Radius:").grid(
                 row=0, column=0, sticky="w", pady=5
@@ -168,6 +176,10 @@ class UIHandlersMixin:
         self.editor.canvas.config(cursor="crosshair")
         self.editor.status_label.config(text="Click on image to sample color")
 
+        # If we have toggle_eyedropper_mode function, call it
+        if hasattr(self, "toggle_eyedropper_mode"):
+            self.toggle_eyedropper_mode(True)
+
         # Store original bindings
         self.original_click = self.editor.canvas.bind("<Button-1>")
 
@@ -196,6 +208,10 @@ class UIHandlersMixin:
                     self.eyedropper_active = False
                     self.fill_dialog.grab_set()  # Restore dialog as modal
                     self.editor.status_label.config(text="Color sampled")
+
+                    # If we have toggle_eyedropper_mode function, call it
+                    if hasattr(self, "toggle_eyedropper_mode"):
+                        self.toggle_eyedropper_mode(False)
 
                     # Restore original binding
                     self.editor.canvas.bind("<Button-1>", self.original_click)
@@ -229,104 +245,215 @@ class UIHandlersMixin:
         self.preview_status.config(text="Generating preview...")
 
         # Create a thread for processing to avoid freezing UI
-        def process_preview():
-            try:
-                # Get a copy of the working image
-                img_copy = self.editor.working_image.copy()
-                algorithm = self.algorithm_var.get()
+        self.process_thread = threading.Thread(target=self.process_preview)
+        self.process_thread.daemon = True
+        self.process_thread.start()
 
-                # Get selection coordinates
-                x1, y1, x2, y2 = self.selection_coords
+    def process_preview(self):
+        try:
+            # Get a copy of the working image
+            img_copy = self.editor.working_image.copy()
+            algorithm = self.algorithm_var.get()
 
-                # Create a before/after comparison image
-                # Make a copy of the original for the "before" part
-                before_img = img_copy.copy()
+            # Get selection coordinates
+            x1, y1, x2, y2 = self.selection_coords
 
-                # Apply the selected algorithm to get "after" preview
-                if algorithm in ["opencv_telea", "opencv_ns"]:
-                    after_img = self.apply_opencv_inpainting(img_copy, preview=True)
-                elif algorithm == "patch_based":
-                    after_img = self.apply_patch_based(img_copy, preview=True)
-                elif algorithm == "lama_pytorch":
-                    after_img = self.apply_lama_pytorch(img_copy, preview=True)
-                elif algorithm == "deepfill_tf":
-                    after_img = self.apply_deepfill_tf(img_copy, preview=True)
-                else:
-                    after_img = img_copy.copy()  # Default fallback
+            # Create a before/after comparison image
+            # Make a copy of the original for the "before" part
+            before_img = img_copy.copy()
 
-                # Get color influence if set
-                influence = self.influence_var.get()
-                if influence > 0:
-                    after_img = self.apply_color_influence(after_img, preview=True)
+            # Apply the selected algorithm to get "after" preview
+            if algorithm == "none":
+                # For "None" option, use the original image as the "after" image as well
+                after_img = before_img.copy()
+            elif algorithm in ["opencv_telea", "opencv_ns"]:
+                after_img = self.apply_opencv_inpainting(img_copy, preview=True)
+            elif algorithm == "patch_based":
+                after_img = self.apply_patch_based(img_copy, preview=True)
+            elif algorithm == "lama_pytorch":
+                after_img = self.apply_lama_pytorch(img_copy, preview=True)
+            elif algorithm == "deepfill_tf":
+                after_img = self.apply_deepfill_tf(img_copy, preview=True)
+            else:
+                after_img = img_copy.copy()  # Default fallback
 
-                # Create side-by-side preview
-                # For preview, crop to the selection area plus some margin
-                margin = 50  # pixels around the selection
-                crop_x1 = max(0, x1 - margin)
-                crop_y1 = max(0, y1 - margin)
-                crop_x2 = min(img_copy.width, x2 + margin)
-                crop_y2 = min(img_copy.height, y2 + margin)
+            # Get color influence if set - only apply if we're not using "none" algorithm
+            influence = self.influence_var.get()
+            if influence > 0 and algorithm != "none":
+                after_img = self.apply_color_influence(after_img, preview=True)
 
-                # Crop both images to the same region
-                before_crop = before_img.crop((crop_x1, crop_y1, crop_x2, crop_y2))
-                after_crop = after_img.crop((crop_x1, crop_y1, crop_x2, crop_y2))
+            # Create side-by-side preview
+            # For preview, crop to the selection area plus some margin
+            margin = 50  # pixels around the selection
+            crop_x1 = max(0, x1 - margin)
+            crop_y1 = max(0, y1 - margin)
+            crop_x2 = min(img_copy.width, x2 + margin)
+            crop_y2 = min(img_copy.height, y2 + margin)
 
-                # Create preview image (scaled down if needed)
-                preview_width = self.preview_canvas.winfo_width() - 10
-                if preview_width < 100:  # If canvas not yet sized, use a default
-                    preview_width = 300
+            # Crop both images to the same region
+            before_crop = before_img.crop((crop_x1, crop_y1, crop_x2, crop_y2))
+            after_crop = after_img.crop((crop_x1, crop_y1, crop_x2, crop_y2))
 
-                # Calculate aspect ratio and preview size
-                aspect_ratio = before_crop.height / before_crop.width
-                preview_height = int(preview_width * aspect_ratio)
+            # Create preview image (scaled down if needed)
+            preview_width = self.preview_canvas.winfo_width() - 10
+            if preview_width < 100:  # If canvas not yet sized, use a default
+                preview_width = 300
 
-                # Resize for preview
-                before_preview = before_crop.resize((preview_width, preview_height), Image.LANCZOS)
-                after_preview = after_crop.resize((preview_width, preview_height), Image.LANCZOS)
+            # Calculate aspect ratio and preview size
+            aspect_ratio = before_crop.height / before_crop.width
+            preview_height = int(preview_width * aspect_ratio)
 
-                # Store both images for the split preview
-                self.before_preview = before_preview
-                self.after_preview = after_preview
+            # Resize for preview
+            before_preview = before_crop.resize((preview_width, preview_height), Image.LANCZOS)
+            after_preview = after_crop.resize((preview_width, preview_height), Image.LANCZOS)
 
-                # Create initial display with "after" result
+            # Store both images for the split preview
+            self.before_preview = before_preview
+            self.after_preview = after_preview
+
+            # For "none" algorithm, both before and after are the same
+            if algorithm == "none":
+                # Use same image for both
+                self.preview_photo = ImageTk.PhotoImage(before_preview)
+                self.before_photo = ImageTk.PhotoImage(before_preview)
+            else:
+                # Create initial display with "after" result for other algorithms
                 self.preview_photo = ImageTk.PhotoImage(after_preview)
                 self.before_photo = ImageTk.PhotoImage(before_preview)
 
-                # Update UI in main thread
-                self.fill_dialog.after(0, self.update_preview_canvas)
-            except Exception as e:
-                print(f"Preview error: {e}")
-                self.fill_dialog.after(0, lambda: self.preview_status.config(text=f"Preview error: {str(e)}"))
-            finally:
-                self.is_processing = False
-                self.fill_dialog.after(0, self.progress.stop)
-
-        # Start processing thread
-        self.process_thread = threading.Thread(target=process_preview)
-        self.process_thread.daemon = True
-        self.process_thread.start()
+            # Update UI in main thread
+            self.fill_dialog.after(0, self.update_preview_canvas)
+        except Exception as e:
+            print(f"Preview error: {e}")
+            self.fill_dialog.after(0, lambda: self.preview_status.config(text=f"Preview error: {str(e)}"))
+        finally:
+            self.is_processing = False
+            self.fill_dialog.after(0, self.progress.stop)
 
     def update_preview_canvas(self):
         """Update the preview canvas with the processed image"""
         if self.preview_photo and self.before_photo:
             self.preview_canvas.delete("all")
 
-            # Set canvas size to match the preview
-            self.preview_canvas.config(width=self.preview_photo.width(), height=self.preview_photo.height())
+            # Apply zoom factor to determine display dimensions
+            zoomed_width = int(self.preview_photo.width() * self.zoom_level)
+            zoomed_height = int(self.preview_photo.height() * self.zoom_level)
 
-            # Draw the "after" version as the default
-            self.image_item = self.preview_canvas.create_image(0, 0, anchor="nw", image=self.preview_photo)
+            # Configure canvas scrollregion for the zoomed image
+            self.preview_canvas.config(scrollregion=(0, 0, zoomed_width, zoomed_height))
+
+            # Draw the "after" version as the default with a tag for scaling
+            self.image_item = self.preview_canvas.create_image(
+                0, 0, anchor="nw", image=self.preview_photo, tags=("preview_image",)
+            )
+
+            # Scale the image if zoomed
+            if self.zoom_level != 1.0:
+                self.preview_canvas.scale("preview_image", 0, 0, self.zoom_level, self.zoom_level)
 
             # Add mouse hover binding to show before/after
             def on_mouse_enter(event):
                 # Show the "before" version on hover
                 self.preview_canvas.itemconfig(self.image_item, image=self.before_photo)
+                self.is_hovering = True
 
             def on_mouse_leave(event):
                 # Show the "after" version when not hovering
                 self.preview_canvas.itemconfig(self.image_item, image=self.preview_photo)
+                self.is_hovering = False
 
             self.preview_canvas.bind("<Enter>", on_mouse_enter)
             self.preview_canvas.bind("<Leave>", on_mouse_leave)
 
-            self.preview_status.config(text="Ready - hover to see original")
+            self.preview_status.config(text=f"Ready - hover to see original (Zoom: {int(self.zoom_level * 100)}%)")
+
+    def zoom_preview(self, factor):
+        """Change the zoom level of the preview
+
+        Args:
+            factor: Zoom factor (use 1.0 to reset, >1.0 to zoom in, <1.0 to zoom out)
+        """
+        if not hasattr(self, "preview_photo") or not self.preview_photo:
+            return
+
+        # Calculate new zoom level
+        if factor == 1.0:
+            # Reset zoom
+            self.zoom_level = 1.0
+        else:
+            # Adjust zoom
+            new_zoom = self.zoom_level * factor
+            # Limit zoom range (0.1x to 5.0x)
+            self.zoom_level = max(0.1, min(5.0, new_zoom))
+
+        # Update the canvas
+        self.update_preview_canvas()
+
+        # Update zoom status
+        self.zoom_percentage.config(text=f"{int(self.zoom_level * 100)}%")
+
+    def toggle_eyedropper_mode(self, active):
+        """Toggle between eyedropper mode and normal preview mode
+
+        Args:
+            active: True to activate eyedropper mode, False to deactivate
+        """
+        if active:
+            # If eyedropper is active, disable panning temporarily
+            self.preview_canvas.unbind("<ButtonPress-1>")
+            self.preview_canvas.unbind("<B1-Motion>")
+            self.preview_canvas.unbind("<ButtonRelease-1>")
+        else:
+            # Restore panning when eyedropper is done
+            self.preview_canvas.bind("<ButtonPress-1>", self.start_pan)
+            self.preview_canvas.bind("<B1-Motion>", self.do_pan)
+            self.preview_canvas.bind("<ButtonRelease-1>", self.end_pan)
+
+    def start_pan(self, event):
+        """Start canvas panning operation
+
+        Args:
+            event: The mouse event
+        """
+        # Only start panning with left mouse button
+        if event.num == 1:
+            self.is_panning = True
+            self.preview_canvas.scan_mark(event.x, event.y)
+            # Remember current hover state
+            self.hover_state_before_pan = getattr(self, "is_hovering", False)
+
+    def do_pan(self, event):
+        """Continue canvas panning operation
+
+        Args:
+            event: The mouse event
+        """
+        if hasattr(self, "is_panning") and self.is_panning:
+            self.preview_canvas.scan_dragto(event.x, event.y, gain=1)
+
+    def end_pan(self, event):
+        """End canvas panning operation
+
+        Args:
+            event: The mouse event
+        """
+        if hasattr(self, "is_panning") and self.is_panning:
+            self.is_panning = False
+            # Restore proper hover state based on current mouse position
+            x, y = self.preview_canvas.winfo_pointerxy()
+            canvas_x, canvas_y = self.preview_canvas.winfo_rootx(), self.preview_canvas.winfo_rooty()
+            canvas_width, canvas_height = self.preview_canvas.winfo_width(), self.preview_canvas.winfo_height()
+
+            # Check if mouse is within canvas bounds
+            if canvas_x <= x < canvas_x + canvas_width and canvas_y <= y < canvas_y + canvas_height:
+                # Mouse is over canvas
+                if not getattr(self, "is_hovering", False):
+                    if hasattr(self, "image_item") and hasattr(self, "before_photo"):
+                        self.preview_canvas.itemconfig(self.image_item, image=self.before_photo)
+                    self.is_hovering = True
+            else:
+                # Mouse is outside canvas
+                if getattr(self, "is_hovering", False):
+                    if hasattr(self, "image_item") and hasattr(self, "preview_photo"):
+                        self.preview_canvas.itemconfig(self.image_item, image=self.preview_photo)
+                    self.is_hovering = False

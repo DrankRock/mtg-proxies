@@ -1094,20 +1094,8 @@ class CardEditor:
         # Check for fonts in the directory
         font_files = list(fonts_dir.glob("*.ttf")) + list(fonts_dir.glob("*.otf"))
 
-        # Also include system fonts if possible
-        system_fonts = []
-        try:
-            # Try different common system font locations
-            for font_path in ["/usr/share/fonts", "/Library/Fonts", "C:/Windows/Fonts"]:  # Linux  # macOS  # Windows
-                if os.path.exists(font_path):
-                    system_fonts.extend(Path(font_path).glob("*.ttf"))
-                    system_fonts.extend(Path(font_path).glob("*.otf"))
-                    break
-        except:
-            pass
-
         # Combine custom and system fonts, use set to remove duplicates
-        all_fonts = list(set([f.name for f in font_files] + [f.name for f in system_fonts]))
+        all_fonts = list(set([f.name for f in font_files]))
         all_fonts.sort()
 
         # If no fonts found, add a default

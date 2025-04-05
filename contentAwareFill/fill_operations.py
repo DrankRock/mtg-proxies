@@ -11,6 +11,11 @@ class FillOperationsMixin:
         if self.is_processing:
             return
 
+        # For "none" algorithm, we can just close the dialog without applying changes
+        if self.algorithm_var.get() == "none":
+            self.cancel_fill()
+            return
+
         self.is_processing = True
         self.progress.start(10)
         self.status_label.config(text="Applying fill...")

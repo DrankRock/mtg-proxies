@@ -109,10 +109,16 @@ class FillAlgorithmsMixin:
         result_rgb = cv2.cvtColor(result.astype(np.uint8), cv2.COLOR_BGR2RGB)
         return Image.fromarray(result_rgb)
 
-    def _patch_match_inpaint(self, img, mask, coords):
-        """Custom implementation of patch-based inpainting
+    def _patch_match_inpaint(self, img, mask, coords, num_iterations=400):
+        """Improved implementation of patch-based inpainting that guarantees visible results
 
-        This is a simplified version of PatchMatch algorithm that preserves textures
+        This version ensures patches are always applied and visible in the result
+
+        Args:
+            img: Input image
+            mask: Mask where 255 indicates pixels to be filled
+            coords: (x1, y1, x2, y2) coordinates of the selection
+            num_iterations: Number of random patches to try for each fill area (default: 400)
         """
         x1, y1, x2, y2 = coords
         patch_size = self.patch_size_var.get()
@@ -131,18 +137,20 @@ class FillAlgorithmsMixin:
         search_y2 = min(img.shape[0], y2 + search_area)
 
         # Create a priority map (boundary pixels filled first)
-        # We'll use distance transform to prioritize pixels near the boundary
         dist_transform = cv2.distanceTransform(fill_mask, cv2.DIST_L2, 3)
 
-        # Normalize to 0-1 range
+        # Normalize to 0-1 range and invert (boundary pixels have higher priority)
         if dist_transform.max() > 0:
-            dist_transform = dist_transform / dist_transform.max()
-
-        # Invert so boundary pixels have higher priority
-        priority_map = 1.0 - dist_transform
+            priority_map = 1.0 - (dist_transform / dist_transform.max())
+        else:
+            priority_map = np.ones_like(dist_transform)  # Fallback if max is 0
 
         # Get coordinates of pixels to fill
         fill_points = np.column_stack(np.where(fill_mask > 0))
+
+        # Exit early if there are no points to fill
+        if len(fill_points) == 0:
+            return result
 
         # Sort by priority (highest first)
         priorities = np.array([priority_map[y, x] for y, x in fill_points])
@@ -154,11 +162,18 @@ class FillAlgorithmsMixin:
         # Process in chunks to show progress
         chunk_size = max(1, len(fill_points) // 10)
 
+        # Keep track of last valid patch to use as fallback
+        last_valid_patch = None
+
+        # Create a visualization of the fill area (for debugging)
+        debug_img = result.copy()
+        cv2.rectangle(debug_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+
         for i in range(0, len(fill_points), chunk_size):
             chunk = fill_points[i : i + chunk_size]
 
             for y, x in chunk:
-                # Skip if this pixel is already filled (can happen due to overlapping patches)
+                # Skip if this pixel is already filled
                 if fill_mask[y, x] == 0:
                     continue
 
@@ -168,60 +183,136 @@ class FillAlgorithmsMixin:
                 patch_x1 = max(0, x - half_patch)
                 patch_x2 = min(img.shape[1], x + half_patch + 1)
 
+                # Current patch dimensions
+                curr_h, curr_w = patch_y2 - patch_y1, patch_x2 - patch_x1
+
                 # Find best matching patch
                 best_score = float("inf")
                 best_patch = None
 
-                # Random sampling of source patches for efficiency
-                num_samples = 100  # Limit number of patches to try
+                # Use the number of iterations parameter for sampling
+                num_samples = num_iterations  # Number of random patches to try
 
                 for _ in range(num_samples):
                     # Random source location in search area
                     src_y = np.random.randint(search_y1, search_y2)
                     src_x = np.random.randint(search_x1, search_x2)
 
-                    # Make sure source patch doesn't overlap with fill area
+                    # Source patch boundaries
                     src_patch_y1 = max(0, src_y - half_patch)
                     src_patch_y2 = min(img.shape[0], src_y + half_patch + 1)
                     src_patch_x1 = max(0, src_x - half_patch)
                     src_patch_x2 = min(img.shape[1], src_x + half_patch + 1)
 
-                    # Skip if source patch intersects with fill mask
-                    src_patch_mask = fill_mask[src_patch_y1:src_patch_y2, src_patch_x1:src_patch_x2]
-                    if np.any(src_patch_mask > 0):
+                    # Source patch dimensions
+                    src_h, src_w = src_patch_y2 - src_patch_y1, src_patch_x2 - src_patch_x1
+
+                    # Skip if dimensions don't match current patch
+                    if src_h != curr_h or src_w != curr_w:
                         continue
 
                     # Extract source patch
                     src_patch = img[src_patch_y1:src_patch_y2, src_patch_x1:src_patch_x2]
 
-                    # Extract target patch (where we can see it)
-                    target_patch = result[patch_y1:patch_y2, patch_x1:patch_x2]
-                    target_mask = fill_mask[patch_y1:patch_y2, patch_x1:patch_x2] == 0
+                    # Extract patch mask (0 where already filled/visible)
+                    patch_mask = fill_mask[patch_y1:patch_y2, patch_x1:patch_x2]
 
-                    # Skip if patches have different shapes
-                    if src_patch.shape != target_patch.shape:
+                    # Extract target patch
+                    target_patch = result[patch_y1:patch_y2, patch_x1:patch_x2]
+
+                    # Compute visible areas (where mask is 0)
+                    visible_mask = patch_mask == 0
+
+                    # If there are no visible pixels to compare, use the whole patch
+                    # This relaxes the criteria to ensure we always find something
+                    if not np.any(visible_mask):
+                        # Save this patch as a valid one, even if not optimal
+                        if last_valid_patch is None or src_patch.shape == (curr_h, curr_w, 3):
+                            last_valid_patch = src_patch.copy()
                         continue
 
-                    # Compare only visible parts
-                    if np.any(target_mask):
-                        visible_diff = (src_patch[target_mask] - target_patch[target_mask]) ** 2
-                        score = np.mean(visible_diff)
+                    # Calculate difference only in visible areas
+                    diff = (src_patch - target_patch) ** 2
+
+                    # Compute score using visible areas only
+                    masked_diff = diff[visible_mask]
+                    if len(masked_diff) > 0:
+                        # Weight the score by the amount of visible pixels (prefer more context)
+                        visible_ratio = np.sum(visible_mask) / visible_mask.size
+                        score = np.mean(masked_diff) * (1.0 - 0.3 * visible_ratio)  # Favor patches with more context
 
                         if score < best_score:
                             best_score = score
                             best_patch = src_patch.copy()
 
-                # If we found a matching patch, use it
+                            # Save as fallback
+                            last_valid_patch = best_patch
+
+                            # Stop early if we find a very good match
+                            if score < 5.0:  # Early stopping for excellent matches
+                                break
+
+                # Apply the best patch if found
                 if best_patch is not None:
-                    # Create a mask for the current patch
+                    # Get current patch mask (where pixels need filling)
                     curr_mask = fill_mask[patch_y1:patch_y2, patch_x1:patch_x2] > 0
 
-                    # Apply patch only to masked pixels
-                    if curr_mask.shape == best_patch.shape:
-                        result[patch_y1:patch_y2, patch_x1:patch_x2][curr_mask] = best_patch[curr_mask]
+                    # Create a blending mask for smooth transitions at the boundaries
+                    blend_mask = curr_mask.copy().astype(np.float32)
 
-                        # Mark these pixels as filled
-                        fill_mask[patch_y1:patch_y2, patch_x1:patch_x2][curr_mask] = 0
+                    # Apply a small blur to the mask edges for smoother blending
+                    if np.any(curr_mask):
+                        blend_mask_uint8 = (blend_mask * 255).astype(np.uint8)
+                        # Use a small kernel for subtle edge blending (3x3)
+                        blend_mask_blurred = cv2.GaussianBlur(blend_mask_uint8, (3, 3), 0)
+                        blend_mask = blend_mask_blurred.astype(np.float32) / 255.0
+
+                    # Stack the blend mask to match image dimensions
+                    blend_mask_3channel = np.stack([blend_mask, blend_mask, blend_mask], axis=2)
+
+                    # Get target and source patches
+                    target = result[patch_y1:patch_y2, patch_x1:patch_x2]
+                    source = best_patch
+
+                    # Alpha blend at the boundaries for smooth transitions
+                    blended = source * blend_mask_3channel + target * (1 - blend_mask_3channel)
+
+                    # Update result with the blended patch
+                    result[patch_y1:patch_y2, patch_x1:patch_x2] = blended
+
+                    # Mark these pixels as filled (keep original binary mask for tracking)
+                    fill_mask[patch_y1:patch_y2, patch_x1:patch_x2][curr_mask] = 0
+
+                # If no patch was found but we have a fallback, use it
+                elif last_valid_patch is not None and last_valid_patch.shape == (curr_h, curr_w, 3):
+                    curr_mask = fill_mask[patch_y1:patch_y2, patch_x1:patch_x2] > 0
+
+                    # Apply the last valid patch we found
+                    result[patch_y1:patch_y2, patch_x1:patch_x2][curr_mask] = last_valid_patch[curr_mask]
+
+                    # Mark these pixels as filled
+                    fill_mask[patch_y1:patch_y2, patch_x1:patch_x2][curr_mask] = 0
+
+        # If there are still unfilled areas, use simple average color fill as fallback
+        remaining = np.where(fill_mask > 0)
+        if len(remaining[0]) > 0:
+            # Calculate average color from surrounding area
+            expanded_x1 = max(0, x1 - patch_size)
+            expanded_y1 = max(0, y1 - patch_size)
+            expanded_x2 = min(img.shape[1], x2 + patch_size)
+            expanded_y2 = min(img.shape[0], y2 + patch_size)
+
+            # Create mask for original area
+            original_area_mask = np.ones((expanded_y2 - expanded_y1, expanded_x2 - expanded_x1), dtype=bool)
+            original_area_mask[(y1 - expanded_y1) : (y2 - expanded_y1), (x1 - expanded_x1) : (x2 - expanded_x1)] = False
+
+            # Get colors from surrounding areas
+            surrounding = img[expanded_y1:expanded_y2, expanded_x1:expanded_x2]
+            if surrounding.size > 0 and np.any(original_area_mask):
+                avg_color = np.mean(surrounding[original_area_mask], axis=0)
+
+                # Fill remaining pixels with average color
+                result[remaining] = avg_color
 
         return result
 
