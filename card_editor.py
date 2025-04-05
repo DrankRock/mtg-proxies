@@ -9,6 +9,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
+from contentAwareFill import EnhancedContentAwareFill
+
 
 class EditorTool(Enum):
     SELECT = auto()
@@ -1076,11 +1078,6 @@ class CardEditor:
         """Apply content-aware fill to the selected area"""
         if not self.selection_coords:
             return
-
-        # Import the enhanced content-aware fill
-        # Note: In practice, this would be imported at the top of the file
-        # or as a separate module. We're showing it here for demonstration.
-        from enhanced_content_aware_fill import EnhancedContentAwareFill
 
         # Create the enhanced fill dialog
         fill_handler = EnhancedContentAwareFill(self, self.selection_coords)
