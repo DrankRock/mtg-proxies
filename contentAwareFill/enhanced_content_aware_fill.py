@@ -10,15 +10,18 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
-from .fill_algorithms import FillAlgorithmsMixin
-from .fill_operations import FillOperationsMixin
+from .color_selection import ColorSelectionMixin  # Import our new color selection functionality
 
 # Import components using relative imports for package structure
+from .fill_algorithms import FillAlgorithmsMixin
+from .fill_operations import FillOperationsMixin
 from .ui_handlers import UIHandlersMixin
 from .utils import UtilsMixin
 
 
-class EnhancedContentAwareFill(UIHandlersMixin, FillAlgorithmsMixin, FillOperationsMixin, UtilsMixin):
+class EnhancedContentAwareFill(
+    ColorSelectionMixin, UIHandlersMixin, FillAlgorithmsMixin, FillOperationsMixin, UtilsMixin
+):
     """Enhanced Content-Aware Fill with multiple algorithm options"""
 
     def __init__(self, editor, selection_coords):
@@ -33,6 +36,7 @@ class EnhancedContentAwareFill(UIHandlersMixin, FillAlgorithmsMixin, FillOperati
         self.selection_coords = selection_coords
         self.root = editor.root
         self.working_image = editor.working_image
+        self.use_color_mask = False
 
         # Create the dialog
         self.setup_dialog()
@@ -42,7 +46,7 @@ class EnhancedContentAwareFill(UIHandlersMixin, FillAlgorithmsMixin, FillOperati
         # Create a dialog
         self.fill_dialog = tk.Toplevel(self.root)
         self.fill_dialog.title("Enhanced Content-Aware Fill")
-        self.fill_dialog.geometry("550x650")
+        self.fill_dialog.geometry("550x750")  # Increased height for new controls
         self.fill_dialog.transient(self.root)
         self.fill_dialog.grab_set()
 
@@ -85,8 +89,8 @@ class EnhancedContentAwareFill(UIHandlersMixin, FillAlgorithmsMixin, FillOperati
         main_content.pack(fill="both", expand=True)
 
         # Left column - settings
-        settings_frame = ttk.Frame(main_content)
-        settings_frame.pack(side=tk.LEFT, fill="both", expand=True, padx=(0, 10))
+        self.settings_frame = ttk.Frame(main_content)
+        self.settings_frame.pack(side=tk.LEFT, fill="both", expand=True, padx=(0, 10))
 
         # Right column - preview
         preview_frame = ttk.LabelFrame(main_content, text="Preview", padding=10)
@@ -113,7 +117,7 @@ class EnhancedContentAwareFill(UIHandlersMixin, FillAlgorithmsMixin, FillOperati
         )
 
         # Settings column
-        frame = settings_frame
+        frame = self.settings_frame
         row = 0
 
         # Create UI
@@ -195,13 +199,17 @@ class EnhancedContentAwareFill(UIHandlersMixin, FillAlgorithmsMixin, FillOperati
 
             ttk.Label(install_frame, text=install_text, foreground="blue").pack(anchor="w", pady=2)
 
+        # Set up color selection UI - new method from ColorSelectionMixin
+        self.setup_color_selection_ui()
+        row += 1  # Update row count after adding color selection
+
         # Color influence frame
-        color_frame = ttk.LabelFrame(frame, text="Color Settings", padding=10)
-        color_frame.grid(row=row, column=0, sticky="ew", pady=10)
+        self.color_frame = ttk.LabelFrame(frame, text="Color Settings", padding=10)
+        self.color_frame.grid(row=row, column=0, sticky="ew", pady=10)
         row += 1
 
-        ttk.Label(color_frame, text="Influence Color:").grid(row=0, column=0, sticky="w", pady=5)
-        color_select_frame = ttk.Frame(color_frame)
+        ttk.Label(self.color_frame, text="Influence Color:").grid(row=0, column=0, sticky="w", pady=5)
+        color_select_frame = ttk.Frame(self.color_frame)
         color_select_frame.grid(row=0, column=1, sticky="w", pady=5)
 
         color_entry = ttk.Entry(color_select_frame, textvariable=self.color_var, width=8)
@@ -217,8 +225,8 @@ class EnhancedContentAwareFill(UIHandlersMixin, FillAlgorithmsMixin, FillOperati
         ttk.Label(color_select_frame, text="Pick from image", foreground="blue").pack(side=tk.LEFT, padx=5)
 
         # Influence strength
-        ttk.Label(color_frame, text="Color Influence:").grid(row=1, column=0, sticky="w", pady=10)
-        influence_frame = ttk.Frame(color_frame)
+        ttk.Label(self.color_frame, text="Color Influence:").grid(row=1, column=0, sticky="w", pady=10)
+        influence_frame = ttk.Frame(self.color_frame)
         influence_frame.grid(row=1, column=1, sticky="we", pady=10)
 
         influence_scale = ttk.Scale(influence_frame, from_=0, to=1.0, variable=self.influence_var, orient="horizontal")
@@ -263,3 +271,80 @@ class EnhancedContentAwareFill(UIHandlersMixin, FillAlgorithmsMixin, FillOperati
         # Initial preview
         if self.preview_var.get():
             self.update_preview()
+
+    # Override the apply_opencv_inpainting method to use our color mask version
+    def apply_opencv_inpainting(self, image, preview=False):
+        """Apply OpenCV inpainting algorithm with support for color mask
+
+        Args:
+            image: PIL Image to process
+            preview: Whether this is for preview (lower quality for speed)
+
+        Returns:
+            PIL Image with inpainting applied
+        """
+        if hasattr(self, "use_color_mask") and self.use_color_mask:
+            return self.apply_opencv_inpainting_with_color_mask(image, preview)
+        else:
+            # Use the original implementation
+            return super().apply_opencv_inpainting(image, preview)
+
+    # Similar override for patch_based method
+    def apply_patch_based(self, image, preview=False):
+        """Apply patch-based filling algorithm with support for color mask
+
+        Args:
+            image: PIL Image to process
+            preview: Whether this is for preview (lower quality for speed)
+
+        Returns:
+            PIL Image with patch-based filling applied
+        """
+        if hasattr(self, "use_color_mask") and self.use_color_mask:
+            # Convert PIL image to OpenCV format
+            img_cv = np.array(image)
+            # Convert RGB to BGR (OpenCV uses BGR)
+            img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
+
+            # Use color mask instead of rectangular mask
+            mask = (
+                self.color_mask
+                if self.color_mask is not None
+                else np.zeros((image.height, image.width), dtype=np.uint8)
+            )
+
+            # For speed in preview mode, downsample if the selection is large
+            if preview and np.sum(mask > 0) > 10000:
+                scale = 0.5
+                img_small = cv2.resize(img_cv, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+                mask_small = cv2.resize(mask, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
+
+                # Get the coordinates of the selection from the mask
+                y_indices, x_indices = np.where(mask_small > 0)
+                if len(y_indices) > 0 and len(x_indices) > 0:
+                    x1s, y1s = x_indices.min(), y_indices.min()
+                    x2s, y2s = x_indices.max() + 1, y_indices.max() + 1
+                    result_small = self._patch_match_inpaint(img_small, mask_small, (x1s, y1s, x2s, y2s))
+                else:
+                    # No pixels in mask, return original
+                    return image
+
+                # Upsample result
+                result = cv2.resize(result_small, (img_cv.shape[1], img_cv.shape[0]), interpolation=cv2.INTER_CUBIC)
+            else:
+                # Get the coordinates of the selection from the mask
+                y_indices, x_indices = np.where(mask > 0)
+                if len(y_indices) > 0 and len(x_indices) > 0:
+                    x1, y1 = x_indices.min(), y_indices.min()
+                    x2, y2 = x_indices.max() + 1, y_indices.max() + 1
+                    result = self._patch_match_inpaint(img_cv, mask, (x1, y1, x2, y2))
+                else:
+                    # No pixels in mask, return original
+                    return image
+
+            # Convert back to RGB and PIL format
+            result_rgb = cv2.cvtColor(result.astype(np.uint8), cv2.COLOR_BGR2RGB)
+            return Image.fromarray(result_rgb)
+        else:
+            # Use the original implementation
+            return super().apply_patch_based(image, preview)
