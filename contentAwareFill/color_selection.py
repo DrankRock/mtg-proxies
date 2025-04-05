@@ -40,6 +40,10 @@ class ColorSelectionMixin:
         # Make clicking on the color button also trigger the eyedropper
         self.selection_color_button.config(command=self.activate_color_selection)
 
+        # Add button for auto-selecting the darkest color
+        self.auto_dark_btn = ttk.Button(selection_btn_frame, text="Auto Dark", command=self.auto_select_dark_color)
+        self.auto_dark_btn.pack(side=tk.LEFT, padx=5)
+
         ttk.Label(selection_btn_frame, text="Click to select areas by color").pack(side=tk.LEFT, padx=5)
 
         # Tolerance slider
@@ -99,6 +103,88 @@ class ColorSelectionMixin:
         self.original_selection_coords = self.selection_coords
         self.color_mask = None
         self.selection_preview_timer = None
+
+    def auto_select_dark_color(self):
+        """Automatically select the darkest color in the selection area"""
+        self.status_label.config(text="Finding darkest color in selection...")
+        self.progress.start(10)
+
+        # Process in a separate thread to keep UI responsive
+        def process_dark_color_selection():
+            try:
+                # Get the current selection coordinates
+                x1, y1, x2, y2 = self.selection_coords
+
+                # Ensure coordinates are within bounds
+                x1 = max(0, min(x1, self.editor.working_image.width - 1))
+                y1 = max(0, min(y1, self.editor.working_image.height - 1))
+                x2 = max(0, min(x2, self.editor.working_image.width))
+                y2 = max(0, min(y2, self.editor.working_image.height))
+
+                # Crop the image to the selection area
+                selection_area = self.editor.working_image.crop((x1, y1, x2, y2))
+
+                # Convert to numpy array for processing
+                selection_np = np.array(selection_area)
+
+                # Calculate darkness (lower value = darker)
+                if len(selection_np.shape) == 3 and selection_np.shape[2] >= 3:
+                    # For RGB/RGBA images - calculate luminance
+                    # Standard luminance formula: 0.299*R + 0.587*G + 0.114*B
+                    luminance = (
+                        0.299 * selection_np[:, :, 0] + 0.587 * selection_np[:, :, 1] + 0.114 * selection_np[:, :, 2]
+                    )
+
+                    # Find the darkest pixel (minimum luminance)
+                    min_y, min_x = np.unravel_index(luminance.argmin(), luminance.shape)
+
+                    # Get the color of the darkest pixel
+                    dark_color = selection_np[min_y, min_x][:3]  # Get only RGB components
+                else:
+                    # For grayscale images
+                    min_y, min_x = np.unravel_index(selection_np.argmin(), selection_np.shape)
+                    dark_value = selection_np[min_y, min_x]
+                    dark_color = (dark_value, dark_value, dark_value)  # Convert to RGB tuple
+
+                # Set the selected color
+                hex_color = f"#{dark_color[0]:02x}{dark_color[1]:02x}{dark_color[2]:02x}"
+
+                # Update UI in the main thread
+                self.fill_dialog.after(0, lambda: self.selection_color_var.set(hex_color))
+                self.fill_dialog.after(0, lambda: self.selection_color_button.config(bg=hex_color))
+
+                # Set the default tolerance and border size as requested
+                self.fill_dialog.after(0, lambda: self.tolerance_var.set(50))
+                self.fill_dialog.after(0, lambda: self.tolerance_label.config(text="50"))
+
+                self.fill_dialog.after(0, lambda: self.border_size_var.set(2))
+                self.fill_dialog.after(0, lambda: self.border_label.config(text="2"))
+
+                # Store selected color for mask creation
+                self.selected_color = dark_color
+
+                # Calculate position in original image coordinates
+                self.selected_point = (x1 + min_x, y1 + min_y)
+
+                self.fill_dialog.after(0, lambda: self.status_label.config(text=f"Darkest color selected: {hex_color}"))
+
+                # Update preview of selection
+                self.fill_dialog.after(0, self.preview_color_selection)
+
+            except Exception as e:
+                import traceback
+
+                traceback.print_exc()
+                self.fill_dialog.after(
+                    0, lambda: self.status_label.config(text=f"Error finding darkest color: {str(e)}")
+                )
+            finally:
+                self.fill_dialog.after(0, self.progress.stop)
+
+        # Start the processing thread
+        thread = threading.Thread(target=process_dark_color_selection)
+        thread.daemon = True
+        thread.start()
 
     # Modify the update_selection_preview method to work with zoom:
     def update_selection_preview(self, preview_img, crop_coords=None):

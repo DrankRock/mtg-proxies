@@ -328,7 +328,7 @@ class UIHandlersMixin:
             self.fill_dialog.after(0, lambda: self.preview_status.config(text=f"Preview error: {str(e)}"))
         finally:
             self.is_processing = False
-            self.fill_dialog.after(0, self.progress.stop)
+            self.fill_dialog.after(0, self.safe_stop_progress)
 
     def update_preview_canvas(self):
         """Update the preview canvas with the processed image"""

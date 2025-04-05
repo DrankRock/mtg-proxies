@@ -41,6 +41,10 @@ class EnhancedContentAwareFill(
         # Create the dialog
         self.setup_dialog()
 
+        # Auto-select dark color immediately if we have the method
+        if hasattr(self, "auto_select_dark_color"):
+            self.fill_dialog.after(100, self.auto_select_dark_color)  # Short delay to ensure UI is ready
+
     def setup_dialog(self):
         """Set up the dialog with algorithm options"""
         # Create a dialog
@@ -360,6 +364,22 @@ class EnhancedContentAwareFill(
         self.cancel_button = ttk.Button(button_frame, text="Cancel", command=self.cancel_fill)
         self.cancel_button.pack(side=tk.LEFT, padx=5)
 
+        # Add an Auto-Apply button at the top of the dialog for quick processing
+        auto_apply_frame = ttk.Frame(frame)
+        auto_apply_frame.grid(row=0, column=0, sticky="ew", pady=5)
+
+        self.auto_apply_button = ttk.Button(
+            auto_apply_frame,
+            text="Auto-Apply Content-Aware Fill",
+            command=self.auto_apply_dark_fill,
+            style="Accent.TButton",  # Use accent style if available in your theme
+        )
+        self.auto_apply_button.pack(side=tk.LEFT, padx=5, pady=5, fill="x", expand=True)
+
+        ttk.Label(
+            auto_apply_frame, text="Automatically selects dark text and applies content-aware fill", foreground="blue"
+        ).pack(side=tk.LEFT, padx=5)
+
         # Progress and status
         self.status_label = ttk.Label(frame, text="Ready")
         self.status_label.grid(row=row, column=0, sticky="w", pady=10)
@@ -378,6 +398,29 @@ class EnhancedContentAwareFill(
         if self.preview_var.get():
             self.update_preview()
 
+    def safe_update_ui(self, update_func, *args, **kwargs):
+        """Safely update UI elements, checking if they still exist"""
+        try:
+            # Check if dialog still exists
+            if not hasattr(self, "fill_dialog") or not self.fill_dialog.winfo_exists():
+                return False
+
+            # Call the update function
+            if callable(update_func):
+                update_func(*args, **kwargs)
+            return True
+        except (tk.TclError, RuntimeError, AttributeError) as e:
+            print(f"UI update error (safely ignored): {str(e)}")
+            return False
+
+    def safe_stop_progress(self):
+        """Safely stop the progress bar if it exists"""
+        if hasattr(self, "progress") and hasattr(self, "fill_dialog") and self.fill_dialog.winfo_exists():
+            try:
+                self.progress.stop()
+            except (tk.TclError, RuntimeError, AttributeError) as e:
+                print(f"Progress bar stop error (safely ignored): {str(e)}")
+
     # Override the apply_opencv_inpainting method to use our color mask version
     def apply_opencv_inpainting(self, image, preview=False):
         """Apply OpenCV inpainting algorithm with support for color mask
@@ -394,6 +437,91 @@ class EnhancedContentAwareFill(
         else:
             # Use the original implementation
             return super().apply_opencv_inpainting(image, preview)
+
+    def auto_apply_dark_fill(self):
+        """Automatically select dark color and apply content-aware fill"""
+        self.status_label.config(text="Auto-applying content-aware fill...")
+
+        # First set the algorithm to OpenCV Telea if not already set
+        # Skip if algorithm is "none" as we want to use a real algorithm for filling
+        if self.algorithm_var.get() == "none":
+            self.algorithm_var.set("opencv_telea")
+            self.update_ui_for_algorithm()
+
+        # Process in a separate thread
+        def process_auto_apply():
+            try:
+                # First select the darkest color
+                # Get the current selection coordinates
+                x1, y1, x2, y2 = self.selection_coords
+
+                # Ensure coordinates are within bounds
+                x1 = max(0, min(x1, self.editor.working_image.width - 1))
+                y1 = max(0, min(y1, self.editor.working_image.height - 1))
+                x2 = max(0, min(x2, self.editor.working_image.width))
+                y2 = max(0, min(y2, self.editor.working_image.height))
+
+                # Crop the image to the selection area
+                selection_area = self.editor.working_image.crop((x1, y1, x2, y2))
+
+                # Convert to numpy array for processing
+                selection_np = np.array(selection_area)
+
+                # Calculate darkness (lower value = darker)
+                if len(selection_np.shape) == 3 and selection_np.shape[2] >= 3:
+                    # For RGB/RGBA images - calculate luminance
+                    luminance = (
+                        0.299 * selection_np[:, :, 0] + 0.587 * selection_np[:, :, 1] + 0.114 * selection_np[:, :, 2]
+                    )
+
+                    # Find the darkest pixel (minimum luminance)
+                    min_y, min_x = np.unravel_index(luminance.argmin(), luminance.shape)
+
+                    # Get the color of the darkest pixel
+                    dark_color = selection_np[min_y, min_x][:3]
+                else:
+                    # For grayscale images
+                    min_y, min_x = np.unravel_index(selection_np.argmin(), selection_np.shape)
+                    dark_value = selection_np[min_y, min_x]
+                    dark_color = (dark_value, dark_value, dark_value)
+
+                # Set the selected color
+                hex_color = f"#{dark_color[0]:02x}{dark_color[1]:02x}{dark_color[2]:02x}"
+
+                # Update variables
+                self.selection_color_var.set(hex_color)
+                self.selected_color = dark_color
+                self.selected_point = (x1 + min_x, y1 + min_y)
+
+                # Set tolerance and border
+                self.tolerance_var.set(60)
+                self.border_size_var.set(3)
+
+                # Generate color mask
+                self.preview_color_selection()
+
+                # Short delay to ensure mask is created
+                time.sleep(0.5)
+
+                # Apply color selection
+                self.apply_color_selection()
+
+                # Short delay to ensure selection is applied
+                time.sleep(0.2)
+
+                # Finally apply the fill
+                self.fill_dialog.after(0, self.apply_fill)
+
+            except Exception as e:
+                import traceback
+
+                traceback.print_exc()
+                self.fill_dialog.after(0, lambda: self.status_label.config(text=f"Error in auto-apply: {str(e)}"))
+
+        # Start the processing thread
+        thread = threading.Thread(target=process_auto_apply)
+        thread.daemon = True
+        thread.start()
 
     # Similar override for patch_based method
     def apply_patch_based(self, image, preview=False):

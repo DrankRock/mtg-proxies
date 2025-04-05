@@ -56,7 +56,7 @@ class FillOperationsMixin:
                 self.fill_dialog.after(0, lambda: self.cancel_button.config(state="normal"))
             finally:
                 self.is_processing = False
-                self.fill_dialog.after(0, self.progress.stop)
+                self.fill_dialog.after(0, self.safe_stop_progress)
 
         # Start processing thread
         self.process_thread = threading.Thread(target=process_fill)
