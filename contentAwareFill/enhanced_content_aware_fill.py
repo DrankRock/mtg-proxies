@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
+from .auto_text_color import auto_detect_text_color, enhanced_auto_detect_text_color, get_text_mask
 from .color_selection import ColorSelectionMixin  # Import our new color selection functionality
 
 # Import components using relative imports for package structure
@@ -17,6 +18,8 @@ from .fill_algorithms import FillAlgorithmsMixin
 from .fill_operations import FillOperationsMixin
 from .ui_handlers import UIHandlersMixin
 from .utils import UtilsMixin
+
+__all__ = ["EnhancedContentAwareFill", "auto_detect_text_color", "enhanced_auto_detect_text_color", "get_text_mask"]
 
 
 class EnhancedContentAwareFill(
@@ -439,11 +442,10 @@ class EnhancedContentAwareFill(
             return super().apply_opencv_inpainting(image, preview)
 
     def auto_apply_dark_fill(self):
-        """Automatically select dark color and apply content-aware fill"""
-        self.status_label.config(text="Auto-applying content-aware fill...")
+        """Automatically detect text color and apply content-aware fill"""
+        self.status_label.config(text="Auto-detecting text and applying content-aware fill...")
 
         # First set the algorithm to OpenCV Telea if not already set
-        # Skip if algorithm is "none" as we want to use a real algorithm for filling
         if self.algorithm_var.get() == "none":
             self.algorithm_var.set("opencv_telea")
             self.update_ui_for_algorithm()
@@ -451,51 +453,34 @@ class EnhancedContentAwareFill(
         # Process in a separate thread
         def process_auto_apply():
             try:
-                # First select the darkest color
-                # Get the current selection coordinates
-                x1, y1, x2, y2 = self.selection_coords
+                # Import the enhanced auto text detection functionality
+                from .auto_text_color import enhanced_auto_detect_text_color
 
-                # Ensure coordinates are within bounds
-                x1 = max(0, min(x1, self.editor.working_image.width - 1))
-                y1 = max(0, min(y1, self.editor.working_image.height - 1))
-                x2 = max(0, min(x2, self.editor.working_image.width))
-                y2 = max(0, min(y2, self.editor.working_image.height))
-
-                # Crop the image to the selection area
-                selection_area = self.editor.working_image.crop((x1, y1, x2, y2))
-
-                # Convert to numpy array for processing
-                selection_np = np.array(selection_area)
-
-                # Calculate darkness (lower value = darker)
-                if len(selection_np.shape) == 3 and selection_np.shape[2] >= 3:
-                    # For RGB/RGBA images - calculate luminance
-                    luminance = (
-                        0.299 * selection_np[:, :, 0] + 0.587 * selection_np[:, :, 1] + 0.114 * selection_np[:, :, 2]
-                    )
-
-                    # Find the darkest pixel (minimum luminance)
-                    min_y, min_x = np.unravel_index(luminance.argmin(), luminance.shape)
-
-                    # Get the color of the darkest pixel
-                    dark_color = selection_np[min_y, min_x][:3]
-                else:
-                    # For grayscale images
-                    min_y, min_x = np.unravel_index(selection_np.argmin(), selection_np.shape)
-                    dark_value = selection_np[min_y, min_x]
-                    dark_color = (dark_value, dark_value, dark_value)
+                # Detect if text is dark or light using enhanced detection
+                is_dark_text, detected_color, detected_point, threshold = enhanced_auto_detect_text_color(
+                    self.editor.working_image, self.selection_coords
+                )
 
                 # Set the selected color
-                hex_color = f"#{dark_color[0]:02x}{dark_color[1]:02x}{dark_color[2]:02x}"
+                hex_color = f"#{detected_color[0]:02x}{detected_color[1]:02x}{detected_color[2]:02x}"
 
                 # Update variables
                 self.selection_color_var.set(hex_color)
-                self.selected_color = dark_color
-                self.selected_point = (x1 + min_x, y1 + min_y)
+                self.selected_color = detected_color
+                self.selected_point = detected_point
 
-                # Set tolerance and border
-                self.tolerance_var.set(60)
+                # Set appropriate tolerance and border
+                self.tolerance_var.set(threshold)
                 self.border_size_var.set(3)
+
+                # Log detection result
+                detection_type = "dark" if is_dark_text else "light"
+                self.fill_dialog.after(
+                    0,
+                    lambda: self.status_label.config(
+                        text=f"Detected {detection_type} text (color: {hex_color}, threshold: {threshold})"
+                    ),
+                )
 
                 # Generate color mask
                 self.preview_color_selection()
@@ -517,6 +502,30 @@ class EnhancedContentAwareFill(
 
                 traceback.print_exc()
                 self.fill_dialog.after(0, lambda: self.status_label.config(text=f"Error in auto-apply: {str(e)}"))
+
+                # Fallback to the original dark color detection if enhanced detection fails
+                try:
+                    self.auto_select_dark_color()
+
+                    # Generate color mask
+                    self.preview_color_selection()
+
+                    # Short delay to ensure mask is created
+                    time.sleep(0.5)
+
+                    # Apply color selection
+                    self.apply_color_selection()
+
+                    # Short delay to ensure selection is applied
+                    time.sleep(0.2)
+
+                    # Apply the fill
+                    self.fill_dialog.after(0, self.apply_fill)
+
+                except Exception as fallback_error:
+                    self.fill_dialog.after(
+                        0, lambda: self.status_label.config(text=f"Error in fallback detection: {str(fallback_error)}")
+                    )
 
         # Start the processing thread
         thread = threading.Thread(target=process_auto_apply)
