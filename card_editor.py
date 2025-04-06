@@ -808,14 +808,12 @@ class CardEditor:
         self.auto_fill_settings_visible = False
         self.auto_fill_settings_frame = ttk.Frame(tools_frame)
 
-        self.auto_fill_settings_visible = False
-        self.auto_fill_settings_frame = ttk.Frame(tools_frame)
-
         # Initialize variables for Auto Fill Text settings
         self.text_color_var = tk.StringVar(value="#000000")  # Default black
         self.color_detect_mode = tk.StringVar(value="dark")  # Default to detect dark
         self.fill_tolerance_var = tk.IntVar(value=80)  # Default tolerance 80
         self.fill_border_var = tk.IntVar(value=3)  # Default border 3px
+        self.advanced_detection_var = tk.BooleanVar(value=True)  # Advanced detection of text
 
         # Toggle button for expanding/collapsing the settings
         self.toggle_settings_btn = ttk.Button(
@@ -851,6 +849,23 @@ class CardEditor:
         # Add eyedropper button
         eyedropper_btn = ttk.Button(color_frame, text="🔍", width=3, command=self.activate_text_eyedropper)
         eyedropper_btn.pack(side=tk.LEFT, padx=5)
+
+        # Detection options
+        detection_frame = ttk.LabelFrame(self.auto_fill_settings_frame, text="Detection Options")
+        detection_frame.pack(fill="x", pady=2, padx=5)
+
+        # Advanced detection checkbox
+        advanced_checkbox = ttk.Checkbutton(
+            detection_frame,
+            text="Advanced text detection",
+            variable=self.advanced_detection_var,
+        )
+        advanced_checkbox.pack(anchor="w", padx=5, pady=2)
+
+        # Add explanation text
+        ttk.Label(
+            detection_frame, text="Helps with thin text detection", font=("TkDefaultFont", 8), foreground="gray"
+        ).pack(anchor="w", padx=20, pady=0)
 
         # Tolerance setting
         tolerance_frame = ttk.Frame(self.auto_fill_settings_frame)
@@ -1309,55 +1324,106 @@ class CardEditor:
             # Get settings from UI
             tolerance = self.fill_tolerance_var.get()
             border_size = self.fill_border_var.get()
+            use_advanced = self.advanced_detection_var.get()
 
-            # Create a mask for just the selection area
+            # Create mask for inpainting
             mask = np.zeros((self.working_image.height, self.working_image.width), dtype=np.uint8)
 
-            # Handle different image types for color matching
-            if len(img_np.shape) == 2:  # Grayscale
-                img_rgb = np.stack([img_np, img_np, img_np], axis=2)
-            elif len(img_np.shape) == 3:
-                if img_np.shape[2] == 4:  # RGBA
-                    img_rgb = img_np[:, :, :3]
-                elif img_np.shape[2] == 3:  # RGB
-                    img_rgb = img_np
+            if use_advanced:
+                # Advanced text detection approach
+                # Extract selection area for processing
+                selection_area = img_np[y1:y2, x1:x2]
+
+                # Convert to grayscale for easier processing if it's RGB
+                if len(selection_area.shape) == 3:
+                    if detection_mode == "dark" or detection_mode == "custom":
+                        # For dark text or custom color, convert to grayscale or calculate color distance
+                        if detection_mode == "custom":
+                            # Calculate distance from target color
+                            target_color_np = np.array(target_color)
+                            color_diffs = np.sum(np.abs(selection_area - target_color_np.reshape(1, 1, 3)), axis=2)
+                            gray_selection = color_diffs.astype(np.uint8)
+                        else:
+                            # Convert RGB to grayscale using standard formula
+                            gray_selection = np.dot(selection_area[..., :3], [0.299, 0.587, 0.114]).astype(np.uint8)
+                    else:  # light mode
+                        # Invert to make light text appear dark
+                        gray_selection = 255 - np.dot(selection_area[..., :3], [0.299, 0.587, 0.114]).astype(np.uint8)
                 else:
-                    raise ValueError(f"Unexpected image format with {img_np.shape[2]} channels")
+                    # Already grayscale
+                    gray_selection = selection_area.copy()
+                    if detection_mode == "light":
+                        gray_selection = 255 - gray_selection  # Invert for light text
+
+                # Apply adaptive thresholding to better separate text from background
+                binary_selection = cv2.adaptiveThreshold(
+                    gray_selection,
+                    255,
+                    cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                    cv2.THRESH_BINARY_INV,
+                    11,  # Block size
+                    2,  # Constant subtracted from mean
+                )
+
+                # Apply morphological operations to improve text detection
+                # Create a small kernel for thin text
+                kernel = np.ones((2, 2), np.uint8)
+
+                # Open operation (erosion followed by dilation) to remove noise
+                opened = cv2.morphologyEx(binary_selection, cv2.MORPH_OPEN, kernel)
+
+                # Additional dilate to ensure thin text is fully covered
+                selection_mask = cv2.dilate(opened, kernel, iterations=1)
+
+                # Use tolerance as a threshold for final adjustment
+                if tolerance > 100:  # If high tolerance, apply additional dilation
+                    extra_kernel = np.ones((tolerance // 50 + 1, tolerance // 50 + 1), np.uint8)
+                    selection_mask = cv2.dilate(selection_mask, extra_kernel, iterations=1)
+
+                # Place selection mask into the full mask
+                mask[y1:y2, x1:x2] = selection_mask
+
             else:
-                raise ValueError(f"Unexpected image shape: {img_np.shape}")
+                # Simple color-based detection approach
+                # Handle different image types
+                if len(img_np.shape) == 2:  # Grayscale
+                    img_rgb = np.stack([img_np, img_np, img_np], axis=2)
+                elif len(img_np.shape) == 3:
+                    if img_np.shape[2] == 4:  # RGBA
+                        img_rgb = img_np[:, :, :3]
+                    elif img_np.shape[2] == 3:  # RGB
+                        img_rgb = img_np
+                    else:
+                        raise ValueError(f"Unexpected image format with {img_np.shape[2]} channels")
+                else:
+                    raise ValueError(f"Unexpected image shape: {img_np.shape}")
 
-            # Calculate color differences ONLY in the selection area
-            # Initialize the color mask with zeros
-            color_mask = np.zeros((self.working_image.height, self.working_image.width), dtype=np.uint8)
+                # Calculate color differences ONLY in the selection area
+                # Initialize the color mask with zeros
+                color_mask = np.zeros((self.working_image.height, self.working_image.width), dtype=np.uint8)
 
-            # Calculate color differences for the selection area
-            selection_rgb = img_rgb[y1:y2, x1:x2]
-            color_diffs = np.sum(np.abs(selection_rgb - np.array(target_color)), axis=2)
-            selection_color_mask = (color_diffs <= tolerance).astype(np.uint8) * 255
+                # Calculate color differences for the selection area
+                selection_rgb = img_rgb[y1:y2, x1:x2]
+                color_diffs = np.sum(np.abs(selection_rgb - np.array(target_color)), axis=2)
+                selection_color_mask = (color_diffs <= tolerance).astype(np.uint8) * 255
 
-            # Place the selection color mask into the full mask
-            color_mask[y1:y2, x1:x2] = selection_color_mask
+                # Place the selection color mask into the full mask
+                color_mask[y1:y2, x1:x2] = selection_color_mask
+
+                # Set the mask
+                mask = color_mask
 
             # Apply border expansion if needed
             if border_size > 0:
                 kernel = np.ones((border_size * 2 + 1, border_size * 2 + 1), np.uint8)
-                color_mask = cv2.dilate(color_mask, kernel, iterations=1)
-
-            # Apply OpenCV inpainting (using Telea algorithm)
-            img_cv = np.array(self.working_image)
-            img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
-
-            # Create a visualization of the mask (for debugging if needed)
-            # mask_vis = np.zeros_like(img_cv)
-            # mask_vis[color_mask > 0] = [0, 0, 255]  # Blue where mask is active
-            # mask_debug = Image.fromarray(cv2.cvtColor(mask_vis, cv2.COLOR_BGR2RGB))
-            # mask_debug.save("mask_debug.png")  # Save for inspection
+                mask = cv2.dilate(mask, kernel, iterations=1)
 
             # Count pixels in mask for feedback
-            pixel_count = np.sum(color_mask > 0)
+            pixel_count = np.sum(mask > 0)
 
-            # Apply inpainting using the color-based mask
-            result = cv2.inpaint(img_cv, color_mask, 5, cv2.INPAINT_TELEA)
+            # Apply OpenCV inpainting (using Telea algorithm)
+            img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+            result = cv2.inpaint(img_cv, mask, 5, cv2.INPAINT_TELEA)
 
             # Convert back to RGB and PIL format
             result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
@@ -1374,8 +1440,9 @@ class CardEditor:
 
             # Update status with color info
             color_hex = f"#{target_color[0]:02x}{target_color[1]:02x}{target_color[2]:02x}"
+            detection_type = "advanced" if use_advanced else "simple"
             self.status_label.config(
-                text=f"Auto fill applied: {pixel_count} pixels matched (color: {color_hex}, tolerance: {tolerance}, border: {border_size}px)"
+                text=f"Auto fill applied: {pixel_count} pixels matched (color: {color_hex}, tolerance: {tolerance}, border: {border_size}px, {detection_type} detection)"
             )
 
         except Exception as e:
