@@ -41,8 +41,10 @@ def add_text_to_selection(editor):
     text_window.transient(editor.root)
     text_window.grab_set()
 
-    # Get selection coordinates for initial position
+    # Get selection coordinates
     x1, y1, x2, y2 = editor.selection_coords
+
+    # Default position is center of selection
     center_x = int((x1 + x2) / 2)
     center_y = int((y1 + y2) / 2)
 
@@ -53,11 +55,65 @@ def add_text_to_selection(editor):
     color_var = tk.StringVar(value="#FFFFFF")
     pos_x_var = tk.IntVar(value=center_x)
     pos_y_var = tk.IntVar(value=center_y)
-    align_var = tk.StringVar(value="center")
+    h_align_var = tk.StringVar(value="left")  # Default horizontal alignment is left
+    v_align_var = tk.StringVar(value="center")  # Default vertical alignment is center
 
     # Live preview variables
     preview_text = None
     preview_img = None
+
+    # Function to calculate actual position based on alignment and text dimensions
+    def calculate_position(text, font_obj, h_alignment, v_alignment):
+        # Get text dimensions
+        lines = text.split("\n")
+
+        # Initialize dimensions
+        total_height = 0
+        max_width = 0
+        line_heights = []
+
+        for line in lines:
+            if not line.strip():  # Handle empty lines
+                line_height = size_var.get()
+                line_heights.append(line_height)
+                total_height += line_height
+                continue
+
+            try:
+                # For newer Pillow versions
+                text_bbox = font_obj.getbbox(line)
+                line_width = text_bbox[2] - text_bbox[0]
+                line_height = text_bbox[3] - text_bbox[1]
+            except:
+                try:
+                    # For older Pillow versions
+                    line_width, line_height = draw.textsize(line, font=font_obj)
+                except:
+                    # Fallback estimation
+                    line_width = len(line) * size_var.get() // 2
+                    line_height = size_var.get()
+
+            max_width = max(max_width, line_width)
+            line_heights.append(line_height)
+            total_height += line_height
+
+        # Calculate X position based on horizontal alignment
+        if h_alignment == "left":
+            x = x1  # Left edge of selection
+        elif h_alignment == "center":
+            x = center_x - (max_width // 2)  # Center of selection - half of text width
+        else:  # right
+            x = x2 - max_width  # Right edge of selection - text width
+
+        # Calculate Y position based on vertical alignment
+        if v_alignment == "top":
+            y = y1  # Top edge of selection
+        elif v_alignment == "center":
+            y = center_y - (total_height // 2)  # Center of selection - half of text height
+        else:  # bottom
+            y = y2 - total_height  # Bottom edge of selection - text height
+
+        return x, y, line_heights, total_height
 
     # Function to update the text preview
     def update_preview(*args):
@@ -72,9 +128,8 @@ def add_text_to_selection(editor):
         size = size_var.get()
         font_name = font_var.get()
         color_value = color_var.get()
-        pos_x = pos_x_var.get()
-        pos_y = pos_y_var.get()
-        alignment = align_var.get()
+        h_alignment = h_align_var.get()
+        v_alignment = v_align_var.get()
 
         # Create a temporary image for preview
         temp_img = editor.working_image.copy()
@@ -110,39 +165,25 @@ def add_text_to_selection(editor):
             except:
                 font_obj = ImageFont.load_default()
 
+        # Calculate position based on alignment
+        text_x, text_y, line_heights, _ = calculate_position(text, font_obj, h_alignment, v_alignment)
+
+        # Update position spinboxes to reflect the calculated alignment position
+        pos_x_var.set(text_x)
+        pos_y_var.set(text_y)
+
         # Handle multiline text
         lines = text.split("\n")
         y_offset = 0
 
-        for line in lines:
+        for i, line in enumerate(lines):
             if not line.strip():  # Skip empty lines but add spacing
-                y_offset += size
+                y_offset += line_heights[i]
                 continue
 
-            # Get text size for this line
-            try:
-                # For older Pillow versions
-                line_width, line_height = draw.textsize(line, font=font_obj)
-            except:
-                # For newer Pillow versions
-                try:
-                    text_bbox = font_obj.getbbox(line)
-                    line_width, line_height = text_bbox[2] - text_bbox[0], text_bbox[3] - text_bbox[1]
-                except:
-                    # Fallback estimation
-                    line_width, line_height = len(line) * size // 2, size
-
-            # Calculate x position based on alignment
-            if alignment == "left":
-                text_x = pos_x
-            elif alignment == "right":
-                text_x = pos_x - line_width
-            else:  # center
-                text_x = pos_x - (line_width // 2)
-
             # Draw text on image
-            draw.text((text_x, pos_y + y_offset), line, fill=color_value, font=font_obj)
-            y_offset += line_height
+            draw.text((text_x, text_y + y_offset), line, fill=color_value, font=font_obj)
+            y_offset += line_heights[i]
 
         # Update the display
         new_size = (int(editor.img_width * editor.zoom_factor), int(editor.img_height * editor.zoom_factor))
@@ -159,9 +200,8 @@ def add_text_to_selection(editor):
         size = size_var.get()
         font_name = font_var.get()
         color_value = color_var.get()
-        pos_x = pos_x_var.get()
-        pos_y = pos_y_var.get()
-        alignment = align_var.get()
+        h_alignment = h_align_var.get()
+        v_alignment = v_align_var.get()
 
         if not text.strip():
             text_window.destroy()
@@ -204,39 +244,21 @@ def add_text_to_selection(editor):
             except:
                 font_obj = ImageFont.load_default()
 
+        # Calculate position based on alignment
+        text_x, text_y, line_heights, _ = calculate_position(text, font_obj, h_alignment, v_alignment)
+
         # Handle multiline text
         lines = text.split("\n")
         y_offset = 0
 
-        for line in lines:
+        for i, line in enumerate(lines):
             if not line.strip():  # Skip empty lines but add spacing
-                y_offset += size
+                y_offset += line_heights[i]
                 continue
 
-            # Get text size for this line
-            try:
-                # For older Pillow versions
-                line_width, line_height = draw.textsize(line, font=font_obj)
-            except:
-                # For newer Pillow versions
-                try:
-                    text_bbox = font_obj.getbbox(line)
-                    line_width, line_height = text_bbox[2] - text_bbox[0], text_bbox[3] - text_bbox[1]
-                except:
-                    # Fallback estimation
-                    line_width, line_height = len(line) * size // 2, size
-
-            # Calculate x position based on alignment
-            if alignment == "left":
-                text_x = pos_x
-            elif alignment == "right":
-                text_x = pos_x - line_width
-            else:  # center
-                text_x = pos_x - (line_width // 2)
-
             # Draw text on image
-            draw.text((text_x, pos_y + y_offset), line, fill=color_value, font=font_obj)
-            y_offset += line_height
+            draw.text((text_x, text_y + y_offset), line, fill=color_value, font=font_obj)
+            y_offset += line_heights[i]
 
         # Record state after adding text
         if hasattr(editor, "record_state"):
@@ -294,7 +316,7 @@ def add_text_to_selection(editor):
     color_button.pack(side=tk.LEFT, padx=5)
 
     # Text position controls
-    pos_frame = ttk.LabelFrame(frame, text="Text Position")
+    pos_frame = ttk.LabelFrame(frame, text="Text Position (updated by alignment)")
     pos_frame.grid(row=4, column=0, columnspan=3, sticky="we", pady=10)
 
     ttk.Label(pos_frame, text="X:").grid(row=0, column=0, sticky="w", padx=5, pady=5)
@@ -309,9 +331,19 @@ def add_text_to_selection(editor):
     align_frame = ttk.LabelFrame(frame, text="Text Alignment")
     align_frame.grid(row=5, column=0, columnspan=3, sticky="we", pady=10)
 
-    ttk.Radiobutton(align_frame, text="Left", variable=align_var, value="left").pack(side=tk.LEFT, padx=20)
-    ttk.Radiobutton(align_frame, text="Center", variable=align_var, value="center").pack(side=tk.LEFT, padx=20)
-    ttk.Radiobutton(align_frame, text="Right", variable=align_var, value="right").pack(side=tk.LEFT, padx=20)
+    # Horizontal alignment
+    h_align_frame = ttk.LabelFrame(align_frame, text="Horizontal Alignment")
+    h_align_frame.pack(fill="x", padx=5, pady=5)
+    ttk.Radiobutton(h_align_frame, text="Left", variable=h_align_var, value="left").pack(side=tk.LEFT, padx=20)
+    ttk.Radiobutton(h_align_frame, text="Center", variable=h_align_var, value="center").pack(side=tk.LEFT, padx=20)
+    ttk.Radiobutton(h_align_frame, text="Right", variable=h_align_var, value="right").pack(side=tk.LEFT, padx=20)
+
+    # Vertical alignment
+    v_align_frame = ttk.LabelFrame(align_frame, text="Vertical Alignment")
+    v_align_frame.pack(fill="x", padx=5, pady=5)
+    ttk.Radiobutton(v_align_frame, text="Top", variable=v_align_var, value="top").pack(side=tk.LEFT, padx=20)
+    ttk.Radiobutton(v_align_frame, text="Center", variable=v_align_var, value="center").pack(side=tk.LEFT, padx=20)
+    ttk.Radiobutton(v_align_frame, text="Bottom", variable=v_align_var, value="bottom").pack(side=tk.LEFT, padx=20)
 
     # Buttons
     button_frame = ttk.Frame(frame)
@@ -326,7 +358,8 @@ def add_text_to_selection(editor):
     color_var.trace_add("write", update_preview)
     pos_x_var.trace_add("write", update_preview)
     pos_y_var.trace_add("write", update_preview)
-    align_var.trace_add("write", update_preview)
+    h_align_var.trace_add("write", update_preview)
+    v_align_var.trace_add("write", update_preview)
 
     # Initial preview
     update_preview()
