@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
+from card_editor.history import HistoryManager
 from card_editor.models import CardPreset, EditorTool
 from card_editor.presets import (
     add_preset,
@@ -55,6 +56,12 @@ class CardEditor:
 
         # Image metadata
         self.img_width, self.img_height = self.working_image.size
+
+        # Initialize history manager
+        self.history = HistoryManager(max_history=5)
+
+        # Add initial state
+        self.history.add_state(self.working_image, "Initial state")
 
         # Create toolbar
         self.create_toolbar()
@@ -841,6 +848,9 @@ class CardEditor:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save image: {str(e)}")
 
+    def close_editor(self):
+        self.root.destroy()
+
     def save_image_as(self):
         """Save the current image with a new name"""
         file_path = filedialog.asksaveasfilename(
@@ -858,14 +868,33 @@ class CardEditor:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to save image: {str(e)}")
 
-    def undo(self):
-        """Undo the last operation (placeholder - would need to implement a history stack)"""
-        messagebox.showinfo("Undo", "Undo functionality not implemented yet")
+    # Replace the undo method:
+    def undo(self, event=None):
+        """Undo the last operation"""
+        if not self.history.can_undo():
+            self.status_label.config(text="Nothing to undo")
+            return
 
-    def close_editor(self):
-        """Close the editor"""
-        if messagebox.askyesno("Close", "Close the editor? Unsaved changes will be lost."):
-            self.root.destroy()
+        # Get the previous state
+        previous_state, description = self.history.undo()
+
+        # Restore the image
+        self.working_image = previous_state
+        self.img_width, self.img_height = self.working_image.size
+
+        # Update the display
+        self.update_display()
+        self.status_label.config(text=f"Undone: {description}")
+
+    # Add method to record state:
+    def record_state(self, description):
+        """
+        Record the current state in history
+
+        Args:
+            description: Description of the operation
+        """
+        self.history.add_state(self.working_image, description)
 
 
 # Function to create and launch the editor

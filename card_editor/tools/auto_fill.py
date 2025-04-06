@@ -22,10 +22,17 @@ def apply_auto_dark_fill(editor, use_gui=False):
     if not editor.selection_coords:
         return
 
+    # Record state before applying auto fill
+    if hasattr(editor, "record_state"):
+        editor.record_state("Before auto fill text")
+
     if use_gui:
         # Create the enhanced fill dialog with explicit auto-apply
-        fill_handler = EnhancedContentAwareFill(editor, editor.selection_coords)
+        def on_apply(description):
+            if hasattr(editor, "record_state"):
+                editor.record_state(description)
 
+        fill_handler = EnhancedContentAwareFill(editor, editor.selection_coords, on_apply_callback=on_apply)
         # Call the auto_apply_dark_fill method directly
         # We need to wait a bit for the dialog to initialize
         fill_handler.fill_dialog.after(100, fill_handler.auto_apply_dark_fill)
@@ -206,6 +213,10 @@ def apply_auto_dark_fill_windowless(editor, clear_selection=True):
 
         # Update working image
         editor.working_image = result_img
+
+        # Record state for undo
+        if hasattr(editor, "record_state"):
+            editor.record_state("Auto fill text")
 
         # Update UI
         editor.update_display()

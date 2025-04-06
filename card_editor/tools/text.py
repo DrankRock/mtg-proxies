@@ -167,6 +167,10 @@ def add_text_to_selection(editor):
             text_window.destroy()
             return
 
+        # Record state before adding text
+        if hasattr(editor, "record_state"):
+            editor.record_state("Before adding text")
+
         # Create drawing context
         draw = ImageDraw.Draw(editor.working_image)
 
@@ -233,6 +237,10 @@ def add_text_to_selection(editor):
             # Draw text on image
             draw.text((text_x, pos_y + y_offset), line, fill=color_value, font=font_obj)
             y_offset += line_height
+
+        # Record state after adding text
+        if hasattr(editor, "record_state"):
+            editor.record_state(f"Added text: {text[:20]}" + ("..." if len(text) > 20 else ""))
 
         # Update display and close window
         editor.update_display()

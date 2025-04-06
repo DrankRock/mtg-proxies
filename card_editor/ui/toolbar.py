@@ -163,6 +163,13 @@ def create_toolbar(editor):
     editor.apply_btn = ttk.Button(actions_frame, text="Apply Changes", command=editor.apply_tool)
     editor.apply_btn.pack(fill="x", pady=2)
 
+    editor.undo_btn = ttk.Button(actions_frame, text="Undo (Ctrl+Z)", command=editor.undo)
+    editor.undo_btn.pack(fill="x", pady=2)
+
+    # Then place the reset button after it:
+    editor.reset_btn = ttk.Button(actions_frame, text="Reset Selection", command=editor.reset_selection)
+    editor.reset_btn.pack(fill="x", pady=2)
+
     editor.reset_btn = ttk.Button(actions_frame, text="Reset Selection", command=editor.reset_selection)
     editor.reset_btn.pack(fill="x", pady=2)
 

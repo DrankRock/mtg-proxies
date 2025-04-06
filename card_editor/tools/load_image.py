@@ -29,6 +29,10 @@ def load_image_to_selection(editor):
         return
 
     try:
+        # Record state before loading image
+        if hasattr(editor, "record_state"):
+            editor.record_state("Before loading image")
+
         # Load the image
         overlay_img = Image.open(file_path)
 
@@ -42,6 +46,10 @@ def load_image_to_selection(editor):
 
         # Paste overlay image onto working image
         editor.working_image.paste(overlay_img, (x1, y1))
+
+        # Record state after loading image
+        if hasattr(editor, "record_state"):
+            editor.record_state(f"Inserted image from {Path(file_path).name}")
 
         # Update display
         editor.update_display()

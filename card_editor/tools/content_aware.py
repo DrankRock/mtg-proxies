@@ -21,6 +21,15 @@ def apply_content_aware_fill(editor, selection_coords=None):
     if not selection_coords:
         return
 
-    # Create the enhanced fill dialog
-    fill_handler = EnhancedContentAwareFill(editor, selection_coords)
+    # Record state before applying content-aware fill
+    if hasattr(editor, "record_state"):
+        editor.record_state("Before content-aware fill")
+
+    # Create fill handler with callback function
+    def on_apply(description):
+        if hasattr(editor, "record_state"):
+            editor.record_state(description)
+
+    # Create the enhanced fill dialog with callback
+    fill_handler = EnhancedContentAwareFill(editor, selection_coords, on_apply_callback=on_apply)
     return fill_handler
