@@ -195,7 +195,11 @@ def apply_auto_dark_fill_windowless(editor, clear_selection=True, iterations=2):
             tolerance = editor.fill_tolerance_var.get()
             border_size = editor.fill_border_var.get()
             use_advanced = editor.advanced_detection_var.get()
-            print(f"DEBUG - Settings: tolerance={tolerance}, border_size={border_size}, use_advanced={use_advanced}")
+            use_patchmatch = editor.use_patchmatch_var.get() if hasattr(editor, "use_patchmatch_var") else False
+
+            print(
+                f"DEBUG - Settings: tolerance={tolerance}, border_size={border_size}, use_advanced={use_advanced}, use_patchmatch={use_patchmatch}"
+            )
 
             # Create mask for inpainting
             mask = np.zeros((editor.working_image.height, editor.working_image.width), dtype=np.uint8)
@@ -318,29 +322,47 @@ def apply_auto_dark_fill_windowless(editor, clear_selection=True, iterations=2):
             total_pixels_filled += pixel_count
             print(f"DEBUG - Final mask has {pixel_count} pixels")
 
-            # Apply OpenCV inpainting (using Telea algorithm)
-            # Make sure we're using RGB for inpainting
-            if len(img_np.shape) == 3 and img_np.shape[2] == 4:
-                img_cv = cv2.cvtColor(img_np[:, :, :3], cv2.COLOR_RGB2BGR)  # RGBA to BGR
+            # Apply inpainting - either PatchMatch or OpenCV
+            if use_patchmatch:
+                # Use PatchMatch-based inpainting for more seamless results
+                patch_size = 7  # Default patch size
+                pm_iterations = 10  # Default iterations for PatchMatch
+
+                # Check if we have custom parameters
+                if hasattr(editor, "patchmatch_patch_size_var"):
+                    patch_size = editor.patchmatch_patch_size_var.get()
+
+                if hasattr(editor, "patchmatch_iterations_var"):
+                    pm_iterations = editor.patchmatch_iterations_var.get()
+
+                print(f"DEBUG - Using PatchMatch inpainting with patch_size={patch_size}, iterations={pm_iterations}")
+                result_img_array = apply_patchmatch_inpainting(img_np, mask, patch_size, pm_iterations)
+                result_img = Image.fromarray(result_img_array)
+
             else:
-                img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)  # RGB to BGR
+                # Apply OpenCV inpainting (using Telea algorithm)
+                # Make sure we're using RGB for inpainting
+                if len(img_np.shape) == 3 and img_np.shape[2] == 4:
+                    img_cv = cv2.cvtColor(img_np[:, :, :3], cv2.COLOR_RGB2BGR)  # RGBA to BGR
+                else:
+                    img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)  # RGB to BGR
 
-            result = cv2.inpaint(img_cv, mask, 5, cv2.INPAINT_TELEA)
-            print("DEBUG - Applied inpainting")
+                result = cv2.inpaint(img_cv, mask, 5, cv2.INPAINT_TELEA)
+                print("DEBUG - Applied OpenCV inpainting with Telea method")
 
-            # Convert back to RGB and PIL format
-            result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+                # Convert back to RGB and PIL format
+                result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
 
-            # If original was RGBA, preserve alpha channel
-            if len(img_np.shape) == 3 and img_np.shape[2] == 4:
-                # Create RGBA result
-                result_rgba = np.zeros((result_rgb.shape[0], result_rgb.shape[1], 4), dtype=np.uint8)
-                result_rgba[:, :, :3] = result_rgb  # RGB channels
-                result_rgba[:, :, 3] = img_np[:, :, 3]  # Alpha channel from original
-                result_img = Image.fromarray(result_rgba)
-                print("DEBUG - Preserved alpha channel in result")
-            else:
-                result_img = Image.fromarray(result_rgb)
+                # If original was RGBA, preserve alpha channel
+                if len(img_np.shape) == 3 and img_np.shape[2] == 4:
+                    # Create RGBA result
+                    result_rgba = np.zeros((result_rgb.shape[0], result_rgb.shape[1], 4), dtype=np.uint8)
+                    result_rgba[:, :, :3] = result_rgb  # RGB channels
+                    result_rgba[:, :, 3] = img_np[:, :, 3]  # Alpha channel from original
+                    result_img = Image.fromarray(result_rgba)
+                    print("DEBUG - Preserved alpha channel in result")
+                else:
+                    result_img = Image.fromarray(result_rgb)
 
             # Update working image - we'll continue processing with this updated image in the next iteration
             editor.working_image = result_img
@@ -356,9 +378,10 @@ def apply_auto_dark_fill_windowless(editor, clear_selection=True, iterations=2):
             color_hex = f"#{target_color[0]:02x}{target_color[1]:02x}{target_color[2]:02x}"
             detection_type = "advanced" if use_advanced else "simple"
             text_type = "dark" if is_dark_text else "light"
+            fill_method = "PatchMatch" if use_patchmatch else "OpenCV Telea"
 
             editor.status_label.config(
-                text=f"Auto fill pass {current_iteration}/{iterations}: {pixel_count} pixels of {text_type} text matched (color: {color_hex}, tolerance: {tolerance}, border: {border_size}px, {detection_type} detection)"
+                text=f"Auto fill pass {current_iteration}/{iterations}: {pixel_count} pixels of {text_type} text matched (color: {color_hex}, method: {fill_method}, tolerance: {tolerance}, border: {border_size}px, {detection_type} detection)"
             )
             print(f"DEBUG - Auto fill iteration {current_iteration} completed successfully")
 
@@ -374,8 +397,9 @@ def apply_auto_dark_fill_windowless(editor, clear_selection=True, iterations=2):
     if iterations > 1:
         text_type = "dark" if is_dark_text else "light"
         detection_type = "advanced" if use_advanced else "simple"
+        fill_method = "PatchMatch" if use_patchmatch else "OpenCV Telea"
         editor.status_label.config(
-            text=f"Auto fill completed: {total_pixels_filled} total pixels of {text_type} text matched over {iterations} passes (tolerance: {tolerance}, border: {border_size}px, {detection_type} detection)"
+            text=f"Auto fill completed: {total_pixels_filled} total pixels of {text_type} text matched over {iterations} passes (method: {fill_method}, tolerance: {tolerance}, border: {border_size}px, {detection_type} detection)"
         )
 
     # Only clear selection after all iterations are complete
@@ -383,3 +407,95 @@ def apply_auto_dark_fill_windowless(editor, clear_selection=True, iterations=2):
         editor.reset_selection()
 
     print(f"\nDEBUG - All {iterations} iterations completed")
+
+
+def apply_patchmatch_inpainting(image_np, mask, patch_size=7, iterations=10):
+    """
+    Apply PatchMatch-based inpainting to the image using the proper API.
+
+    Args:
+        image_np: Numpy array of the image (in RGB format)
+        mask: Binary mask where 255 indicates areas to fill (uint8 array)
+        patch_size: Size of patches to use for matching (default: 7)
+        iterations: Not used by actual API, kept for compatibility
+
+    Returns:
+        Numpy array of the filled image
+    """
+    try:
+        print("DEBUG - Attempting to import PyPatchMatch")
+
+        # First try the default import
+        try:
+            from patchmatch import patch_match
+
+            print("DEBUG - Successfully imported from pypatchmatch")
+        except ImportError:
+            # Try importing directly from the module file
+            print("DEBUG - Trying to import from patch_match")
+        print(f"DEBUG - PyPatchMatch imported, using patch_size={patch_size}")
+
+        # PatchMatch requires RGB image
+        if len(image_np.shape) == 2:
+            # Convert grayscale to RGB
+            image_rgb = np.stack([image_np, image_np, image_np], axis=2)
+        elif image_np.shape[2] == 4:
+            # Take only RGB channels from RGBA
+            image_rgb = image_np[:, :, :3]
+        else:
+            image_rgb = image_np
+
+        # Ensure image is uint8
+        if image_rgb.dtype != np.uint8:
+            image_rgb = image_rgb.astype(np.uint8)
+
+        # Make sure mask is proper format (uint8, single channel)
+        if len(mask.shape) == 3 and mask.shape[2] > 1:
+            # Take just one channel
+            mask_single = mask[:, :, 0]
+        else:
+            mask_single = mask
+
+        # Ensure mask is uint8
+        if mask_single.dtype != np.uint8:
+            mask_single = (mask_single > 0).astype(np.uint8) * 255
+
+        print(f"DEBUG - Image shape: {image_rgb.shape}, Mask shape: {mask_single.shape}")
+
+        # Apply PatchMatch inpainting - using the proper API from the module
+        print("DEBUG - Starting PatchMatch inpainting")
+        result = patch_match.inpaint(image=image_rgb, mask=mask_single, patch_size=patch_size)
+        print("DEBUG - PatchMatch inpainting successful")
+
+        # If original was RGBA, preserve alpha channel
+        if len(image_np.shape) == 3 and image_np.shape[2] == 4:
+            result_rgba = np.zeros_like(image_np)
+            result_rgba[:, :, :3] = result
+            result_rgba[:, :, 3] = image_np[:, :, 3]
+            return result_rgba
+
+        return result
+
+    except Exception as e:
+        print(f"DEBUG - PatchMatch error: {str(e)}")
+
+        # Fall back to OpenCV Telea algorithm
+        print("DEBUG - Falling back to OpenCV inpainting (NS method for better quality)")
+        img_cv = (
+            cv2.cvtColor(image_np[:, :, :3], cv2.COLOR_RGB2BGR)
+            if len(image_np.shape) == 3
+            else cv2.cvtColor(image_np, cv2.COLOR_GRAY2BGR)
+        )
+
+        # Use NS (Navier-Stokes) method instead of Telea for better quality
+        result = cv2.inpaint(img_cv, mask, 3, cv2.INPAINT_NS)
+        result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+
+        # If original was RGBA, preserve alpha channel
+        if len(image_np.shape) == 3 and image_np.shape[2] == 4:
+            result_rgba = np.zeros_like(image_np)
+            result_rgba[:, :, :3] = result_rgb
+            result_rgba[:, :, 3] = image_np[:, :, 3]
+            return result_rgba
+
+        return result_rgb

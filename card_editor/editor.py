@@ -29,6 +29,7 @@ from card_editor.tools import (
     load_image_to_selection,
 )
 from card_editor.ui import create_presets_panel, create_toolbar, display_image, draw_selection_rect
+from contentAwareFill.enhanced_content_aware_fill import EnhancedContentAwareFill
 
 
 class CardEditor:
@@ -53,6 +54,8 @@ class CardEditor:
         self.original_image = Image.open(image_path)
         self.working_image = self.original_image.copy()
         self.display_image = None  # For zoomed/transformed image
+
+        self.fill_iterations_var = tk.IntVar(value=2)
 
         # Image metadata
         self.img_width, self.img_height = self.working_image.size
@@ -763,9 +766,41 @@ class CardEditor:
         """Apply content-aware fill to the selected area"""
         apply_content_aware_fill(self)
 
-    def apply_auto_dark_fill(self, use_gui=False):
-        """Apply auto dark content-aware fill to the selected area"""
-        apply_auto_dark_fill_windowless(self)
+    def apply_auto_dark_fill(editor, use_gui=False, iterations=2):
+        """
+        Apply auto dark content-aware fill to the selected area
+
+        Args:
+            editor: CardEditor instance
+            use_gui: Whether to use the GUI or the windowless implementation
+            iterations: Number of fill iterations to perform (default: 2)
+        """
+        if not editor.selection_coords:
+            return
+
+        # Record state before applying auto fill
+        if hasattr(editor, "record_state"):
+            editor.record_state("Before auto fill text")
+
+        if use_gui:
+            # Create the enhanced fill dialog with explicit auto-apply
+            def on_apply(description):
+                if hasattr(editor, "record_state"):
+                    editor.record_state(description)
+
+            fill_handler = EnhancedContentAwareFill(editor, editor.selection_coords, on_apply_callback=on_apply)
+
+            # Set the iterations value in the UI if it exists
+            if hasattr(fill_handler, "iterations_var"):
+                fill_handler.iterations_var.set(iterations)
+
+            # Call the auto_apply_dark_fill method directly
+            # We need to wait a bit for the dialog to initialize
+            fill_handler.fill_dialog.after(100, fill_handler.auto_apply_dark_fill)
+        else:
+            # Use the windowless implementation with specified iterations
+            iterations = editor.fill_iterations_var.get()
+            apply_auto_dark_fill_windowless(editor, clear_selection=True, iterations=iterations)
 
     def pick_text_color(self):
         """Open color picker for text color"""

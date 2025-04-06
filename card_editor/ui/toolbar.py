@@ -73,6 +73,7 @@ def create_toolbar(editor):
     editor.fill_tolerance_var = tk.IntVar(value=80)  # Default tolerance 80
     editor.fill_border_var = tk.IntVar(value=3)  # Default border 3px
     editor.advanced_detection_var = tk.BooleanVar(value=True)  # Advanced detection of text
+    editor.fill_iterations_var = tk.IntVar(value=2)  # Default iterations 2
 
     # Toggle button for expanding/collapsing the settings
     editor.toggle_settings_btn = ttk.Button(
@@ -145,6 +146,88 @@ def create_toolbar(editor):
 
     border_spinbox = ttk.Spinbox(border_frame, from_=0, to=10, textvariable=editor.fill_border_var, width=5)
     border_spinbox.pack(side=tk.LEFT)
+
+    # Add iterations setting
+    iterations_frame = ttk.Frame(editor.auto_fill_settings_frame)
+    iterations_frame.pack(fill="x", pady=2, padx=5)
+
+    ttk.Label(iterations_frame, text="Iterations:").pack(side=tk.LEFT, padx=(0, 5))
+
+    iterations_spinbox = ttk.Spinbox(iterations_frame, from_=1, to=5, textvariable=editor.fill_iterations_var, width=5)
+    iterations_spinbox.pack(side=tk.LEFT)
+
+    # Add explanation text for iterations
+    ttk.Label(
+        iterations_frame, text="Multiple passes for better results", font=("TkDefaultFont", 8), foreground="gray"
+    ).pack(side=tk.LEFT, padx=5, pady=0)
+
+    # Add this to the create_toolbar function after the iterations_frame section:
+
+    # Add PatchMatch checkbox
+    editor.use_patchmatch_var = tk.BooleanVar(value=False)  # Default to not use PatchMatch
+    patchmatch_frame = ttk.Frame(editor.auto_fill_settings_frame)
+    patchmatch_frame.pack(fill="x", pady=2, padx=5)
+
+    patchmatch_checkbox = ttk.Checkbutton(
+        patchmatch_frame,
+        text="Use PatchMatch inpainting",
+        variable=editor.use_patchmatch_var,
+        command=lambda: toggle_patchmatch_options(editor),
+    )
+    patchmatch_checkbox.pack(anchor="w", padx=5, pady=2)
+
+    # Add explanation text
+    ttk.Label(
+        patchmatch_frame, text="For more seamless, texture-aware fills", font=("TkDefaultFont", 8), foreground="gray"
+    ).pack(anchor="w", padx=20, pady=0)
+
+    # Create a frame for PatchMatch options (initially hidden)
+    editor.patchmatch_options_frame = ttk.Frame(editor.auto_fill_settings_frame)
+
+    # Initialize variables for PatchMatch settings
+    editor.patchmatch_patch_size_var = tk.IntVar(value=7)  # Default patch size
+    editor.patchmatch_iterations_var = tk.IntVar(value=10)  # Default iterations
+
+    # Patch size setting
+    patch_size_frame = ttk.Frame(editor.patchmatch_options_frame)
+    patch_size_frame.pack(fill="x", pady=2, padx=5)
+
+    ttk.Label(patch_size_frame, text="Patch Size:").pack(side=tk.LEFT, padx=(0, 5))
+
+    patch_size_spinbox = ttk.Spinbox(
+        patch_size_frame, from_=3, to=15, textvariable=editor.patchmatch_patch_size_var, width=5
+    )
+    patch_size_spinbox.pack(side=tk.LEFT)
+
+    ttk.Label(
+        patch_size_frame, text="(larger = better quality, slower)", font=("TkDefaultFont", 8), foreground="gray"
+    ).pack(side=tk.LEFT, padx=5)
+
+    # PatchMatch iterations setting
+    pm_iterations_frame = ttk.Frame(editor.patchmatch_options_frame)
+    pm_iterations_frame.pack(fill="x", pady=2, padx=5)
+
+    ttk.Label(pm_iterations_frame, text="PM Iterations:").pack(side=tk.LEFT, padx=(0, 5))
+
+    pm_iterations_spinbox = ttk.Spinbox(
+        pm_iterations_frame, from_=5, to=20, textvariable=editor.patchmatch_iterations_var, width=5
+    )
+    pm_iterations_spinbox.pack(side=tk.LEFT)
+
+    ttk.Label(
+        pm_iterations_frame, text="(more = better quality, slower)", font=("TkDefaultFont", 8), foreground="gray"
+    ).pack(side=tk.LEFT, padx=5)
+
+    # Function to toggle PatchMatch options visibility
+    def toggle_patchmatch_options(editor):
+        if editor.use_patchmatch_var.get():
+            editor.patchmatch_options_frame.pack(fill="x", padx=5, pady=2)
+        else:
+            editor.patchmatch_options_frame.pack_forget()
+
+    # Initially hide PatchMatch options if not checked
+    if not editor.use_patchmatch_var.get():
+        editor.patchmatch_options_frame.pack_forget()
 
     # Other tools continue below
     editor.text_btn = tk.Button(tools_frame, text="Add Text", command=lambda: editor.set_tool(EditorTool.ADD_TEXT))
