@@ -15,6 +15,7 @@ from contentAwareFill import EnhancedContentAwareFill
 class EditorTool(Enum):
     SELECT = auto()
     CONTENT_AWARE_FILL = auto()
+    AUTO_FILL_TEXT = auto()
     ADD_TEXT = auto()
     LOAD_IMAGE = auto()
     PAN = auto()
@@ -797,6 +798,79 @@ class CardEditor:
         )
         self.fill_btn.pack(fill="x", pady=2)
 
+        # Auto Fill Text button
+        self.AUTO_FILL_TEXT_btn = tk.Button(
+            tools_frame, text="Auto Fill Text", command=lambda: self.set_tool(EditorTool.AUTO_FILL_TEXT)
+        )
+        self.AUTO_FILL_TEXT_btn.pack(fill="x", pady=2)
+
+        # Auto Fill Text settings (collapsible)
+        self.auto_fill_settings_visible = False
+        self.auto_fill_settings_frame = ttk.Frame(tools_frame)
+
+        self.auto_fill_settings_visible = False
+        self.auto_fill_settings_frame = ttk.Frame(tools_frame)
+
+        # Initialize variables for Auto Fill Text settings
+        self.text_color_var = tk.StringVar(value="#000000")  # Default black
+        self.color_detect_mode = tk.StringVar(value="dark")  # Default to detect dark
+        self.fill_tolerance_var = tk.IntVar(value=80)  # Default tolerance 80
+        self.fill_border_var = tk.IntVar(value=3)  # Default border 3px
+
+        # Toggle button for expanding/collapsing the settings
+        self.toggle_settings_btn = ttk.Button(
+            tools_frame, text="▼ Auto Fill Settings", command=self.toggle_auto_fill_settings
+        )
+        self.toggle_settings_btn.pack(fill="x", pady=2)
+
+        # Color detection mode frame
+        detect_frame = ttk.LabelFrame(self.auto_fill_settings_frame, text="Detection Mode")
+        detect_frame.pack(fill="x", pady=2, padx=5)
+
+        ttk.Radiobutton(detect_frame, text="Detect Dark Colors", variable=self.color_detect_mode, value="dark").pack(
+            anchor="w", padx=5, pady=2
+        )
+
+        ttk.Radiobutton(detect_frame, text="Detect Light Colors", variable=self.color_detect_mode, value="light").pack(
+            anchor="w", padx=5, pady=2
+        )
+
+        ttk.Radiobutton(
+            detect_frame, text="Select Specific Color", variable=self.color_detect_mode, value="custom"
+        ).pack(anchor="w", padx=5, pady=2)
+
+        # Custom text color selection
+        color_frame = ttk.Frame(self.auto_fill_settings_frame)
+        color_frame.pack(fill="x", pady=2, padx=5)
+
+        ttk.Label(color_frame, text="Text Color:").pack(side=tk.LEFT, padx=(0, 5))
+
+        self.color_button = tk.Button(color_frame, bg=self.text_color_var.get(), width=3, command=self.pick_text_color)
+        self.color_button.pack(side=tk.LEFT, padx=5)
+
+        # Add eyedropper button
+        eyedropper_btn = ttk.Button(color_frame, text="🔍", width=3, command=self.activate_text_eyedropper)
+        eyedropper_btn.pack(side=tk.LEFT, padx=5)
+
+        # Tolerance setting
+        tolerance_frame = ttk.Frame(self.auto_fill_settings_frame)
+        tolerance_frame.pack(fill="x", pady=2, padx=5)
+
+        ttk.Label(tolerance_frame, text="Tolerance:").pack(side=tk.LEFT, padx=(0, 5))
+
+        tolerance_spinbox = ttk.Spinbox(tolerance_frame, from_=1, to=255, textvariable=self.fill_tolerance_var, width=5)
+        tolerance_spinbox.pack(side=tk.LEFT)
+
+        # Border size setting
+        border_frame = ttk.Frame(self.auto_fill_settings_frame)
+        border_frame.pack(fill="x", pady=2, padx=5)
+
+        ttk.Label(border_frame, text="Border Size:").pack(side=tk.LEFT, padx=(0, 5))
+
+        border_spinbox = ttk.Spinbox(border_frame, from_=0, to=10, textvariable=self.fill_border_var, width=5)
+        border_spinbox.pack(side=tk.LEFT)
+
+        # Other tools continue below
         self.text_btn = tk.Button(tools_frame, text="Add Text", command=lambda: self.set_tool(EditorTool.ADD_TEXT))
         self.text_btn.pack(fill="x", pady=2)
 
@@ -869,6 +943,8 @@ class CardEditor:
             self.selected_tool_button = self.pan_btn
         elif tool == EditorTool.CONTENT_AWARE_FILL:
             self.selected_tool_button = self.fill_btn
+        elif tool == EditorTool.AUTO_FILL_TEXT:
+            self.selected_tool_button = self.AUTO_FILL_TEXT_btn
         elif tool == EditorTool.ADD_TEXT:
             self.selected_tool_button = self.text_btn
         elif tool == EditorTool.LOAD_IMAGE:
@@ -927,6 +1003,7 @@ class CardEditor:
         elif self.current_tool in [
             EditorTool.SELECT,
             EditorTool.CONTENT_AWARE_FILL,
+            EditorTool.AUTO_FILL_TEXT,
             EditorTool.LOAD_IMAGE,
             EditorTool.ADD_TEXT,
         ]:
@@ -950,6 +1027,7 @@ class CardEditor:
         elif self.current_tool in [
             EditorTool.SELECT,
             EditorTool.CONTENT_AWARE_FILL,
+            EditorTool.AUTO_FILL_TEXT,
             EditorTool.LOAD_IMAGE,
             EditorTool.ADD_TEXT,
         ]:
@@ -968,6 +1046,7 @@ class CardEditor:
         elif self.current_tool in [
             EditorTool.SELECT,
             EditorTool.CONTENT_AWARE_FILL,
+            EditorTool.AUTO_FILL_TEXT,
             EditorTool.LOAD_IMAGE,
             EditorTool.ADD_TEXT,
         ]:
@@ -985,6 +1064,8 @@ class CardEditor:
                 # Automatically trigger appropriate action based on the selected tool
                 if self.current_tool == EditorTool.CONTENT_AWARE_FILL:
                     self.apply_content_aware_fill()  # Auto-apply content-aware fill
+                elif self.current_tool == EditorTool.AUTO_FILL_TEXT:  # Add this case
+                    self.apply_auto_dark_fill()  # Auto-apply dark fill
                 elif self.current_tool == EditorTool.ADD_TEXT:
                     self.add_text_to_selection()
                 elif self.current_tool == EditorTool.LOAD_IMAGE:
@@ -1069,6 +1150,8 @@ class CardEditor:
 
         if self.current_tool == EditorTool.CONTENT_AWARE_FILL:
             self.apply_content_aware_fill()
+        elif self.current_tool == EditorTool.AUTO_FILL_TEXT:
+            self.apply_auto_dark_fill()
         elif self.current_tool == EditorTool.ADD_TEXT:
             self.add_text_to_selection()
         elif self.current_tool == EditorTool.LOAD_IMAGE:
@@ -1081,6 +1164,225 @@ class CardEditor:
 
         # Create the enhanced fill dialog
         fill_handler = EnhancedContentAwareFill(self, self.selection_coords)
+
+    def toggle_auto_fill_settings(self):
+        """Toggle the visibility of Auto Fill Text settings"""
+        if self.auto_fill_settings_visible:
+            # Hide settings
+            self.auto_fill_settings_frame.pack_forget()
+            self.toggle_settings_btn.config(text="▼ Auto Fill Settings")
+        else:
+            # Show settings
+            self.auto_fill_settings_frame.pack(fill="x", pady=2, before=self.text_btn)
+            self.toggle_settings_btn.config(text="▲ Auto Fill Settings")
+
+        self.auto_fill_settings_visible = not self.auto_fill_settings_visible
+
+    def pick_text_color(self):
+        """Open color picker for text color"""
+        color = colorchooser.askcolor(self.text_color_var.get())[1]
+        if color:
+            self.text_color_var.set(color)
+            self.color_button.config(bg=color)
+
+    def apply_auto_dark_fill(self, usegui=False):
+        """Apply auto dark content-aware fill to the selected area"""
+        if not self.selection_coords:
+            return
+
+        if usegui:
+            # Create the enhanced fill dialog with explicit auto-apply
+            fill_handler = EnhancedContentAwareFill(self, self.selection_coords)
+
+            # Call the auto_apply_dark_fill method directly
+            # We need to wait a bit for the dialog to initialize
+            fill_handler.fill_dialog.after(100, fill_handler.auto_apply_dark_fill)
+        else:
+            # Use the windowless implementation
+            self.apply_auto_dark_fill_windowless()
+
+    def activate_text_eyedropper(self):
+        """Activate the eyedropper tool to sample text color from the image"""
+        self.eyedropper_active = True
+        self.root.grab_release()  # Allow interaction with main window
+        self.canvas.config(cursor="crosshair")
+        self.status_label.config(text="Click on text in image to sample color")
+
+        # Store original binding
+        self.original_canvas_click = self.canvas.bind("<Button-1>")
+
+        # Create a new binding for color sampling
+        def sample_color(event):
+            if not self.eyedropper_active:
+                return
+
+            # Calculate image coordinates from canvas coordinates
+            canvas_x = self.canvas.canvasx(event.x)
+            canvas_y = self.canvas.canvasy(event.y)
+            image_x = int(canvas_x / self.zoom_factor)
+            image_y = int(canvas_y / self.zoom_factor)
+
+            # Check if within image bounds
+            if 0 <= image_x < self.img_width and 0 <= image_y < self.img_height:
+                # Get color at this position
+                try:
+                    rgb = self.working_image.getpixel((image_x, image_y))[:3]
+                    hex_color = f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+
+                    # Update UI
+                    self.text_color_var.set(hex_color)
+                    self.color_button.config(bg=hex_color)
+
+                    # Switch to custom color mode
+                    self.color_detect_mode.set("custom")
+
+                    # Reset cursor and binding
+                    self.canvas.config(cursor="")
+                    self.eyedropper_active = False
+
+                    # Restore original binding
+                    self.canvas.bind("<Button-1>", self.original_canvas_click)
+
+                    self.status_label.config(text=f"Text color sampled: {hex_color}")
+                except Exception as e:
+                    print(f"Error sampling color: {e}")
+
+        # Set temporary binding
+        self.canvas.bind("<Button-1>", sample_color)
+
+    def apply_auto_dark_fill_windowless(self, clear_selection=True):
+        """Apply auto text fill without opening the UI"""
+        if not self.selection_coords:
+            return
+
+        # Get the current selection coordinates
+        x1, y1, x2, y2 = self.selection_coords
+
+        try:
+            # Show processing status
+            self.status_label.config(text="Applying auto fill...")
+
+            # Get selection area
+            selection_area = self.working_image.crop((x1, y1, x2, y2))
+
+            # Convert to numpy array for processing
+            selection_np = np.array(selection_area)
+
+            # Get color to match based on the selected detection mode
+            detection_mode = self.color_detect_mode.get()
+
+            if detection_mode == "dark":
+                # Detect darkest pixel
+                if len(selection_np.shape) == 3 and selection_np.shape[2] >= 3:
+                    luminance = (
+                        0.299 * selection_np[:, :, 0] + 0.587 * selection_np[:, :, 1] + 0.114 * selection_np[:, :, 2]
+                    )
+                    min_y, min_x = np.unravel_index(luminance.argmin(), luminance.shape)
+                    target_color = selection_np[min_y, min_x][:3]
+                else:
+                    min_y, min_x = np.unravel_index(selection_np.argmin(), selection_np.shape)
+                    dark_value = selection_np[min_y, min_x]
+                    target_color = (dark_value, dark_value, dark_value)
+
+            elif detection_mode == "light":
+                # Detect lightest pixel
+                if len(selection_np.shape) == 3 and selection_np.shape[2] >= 3:
+                    luminance = (
+                        0.299 * selection_np[:, :, 0] + 0.587 * selection_np[:, :, 1] + 0.114 * selection_np[:, :, 2]
+                    )
+                    max_y, max_x = np.unravel_index(luminance.argmax(), luminance.shape)
+                    target_color = selection_np[max_y, max_x][:3]
+                else:
+                    max_y, max_x = np.unravel_index(selection_np.argmax(), selection_np.shape)
+                    light_value = selection_np[max_y, max_x]
+                    target_color = (light_value, light_value, light_value)
+
+            else:  # custom
+                # Use the color from the color picker
+                color_hex = self.text_color_var.get()
+                # Convert HEX to RGB
+                target_color = (int(color_hex[1:3], 16), int(color_hex[3:5], 16), int(color_hex[5:7], 16))
+
+            # Get the full image in numpy array format
+            img_np = np.array(self.working_image)
+
+            # Get settings from UI
+            tolerance = self.fill_tolerance_var.get()
+            border_size = self.fill_border_var.get()
+
+            # Create a mask for just the selection area
+            mask = np.zeros((self.working_image.height, self.working_image.width), dtype=np.uint8)
+
+            # Handle different image types for color matching
+            if len(img_np.shape) == 2:  # Grayscale
+                img_rgb = np.stack([img_np, img_np, img_np], axis=2)
+            elif len(img_np.shape) == 3:
+                if img_np.shape[2] == 4:  # RGBA
+                    img_rgb = img_np[:, :, :3]
+                elif img_np.shape[2] == 3:  # RGB
+                    img_rgb = img_np
+                else:
+                    raise ValueError(f"Unexpected image format with {img_np.shape[2]} channels")
+            else:
+                raise ValueError(f"Unexpected image shape: {img_np.shape}")
+
+            # Calculate color differences ONLY in the selection area
+            # Initialize the color mask with zeros
+            color_mask = np.zeros((self.working_image.height, self.working_image.width), dtype=np.uint8)
+
+            # Calculate color differences for the selection area
+            selection_rgb = img_rgb[y1:y2, x1:x2]
+            color_diffs = np.sum(np.abs(selection_rgb - np.array(target_color)), axis=2)
+            selection_color_mask = (color_diffs <= tolerance).astype(np.uint8) * 255
+
+            # Place the selection color mask into the full mask
+            color_mask[y1:y2, x1:x2] = selection_color_mask
+
+            # Apply border expansion if needed
+            if border_size > 0:
+                kernel = np.ones((border_size * 2 + 1, border_size * 2 + 1), np.uint8)
+                color_mask = cv2.dilate(color_mask, kernel, iterations=1)
+
+            # Apply OpenCV inpainting (using Telea algorithm)
+            img_cv = np.array(self.working_image)
+            img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
+
+            # Create a visualization of the mask (for debugging if needed)
+            # mask_vis = np.zeros_like(img_cv)
+            # mask_vis[color_mask > 0] = [0, 0, 255]  # Blue where mask is active
+            # mask_debug = Image.fromarray(cv2.cvtColor(mask_vis, cv2.COLOR_BGR2RGB))
+            # mask_debug.save("mask_debug.png")  # Save for inspection
+
+            # Count pixels in mask for feedback
+            pixel_count = np.sum(color_mask > 0)
+
+            # Apply inpainting using the color-based mask
+            result = cv2.inpaint(img_cv, color_mask, 5, cv2.INPAINT_TELEA)
+
+            # Convert back to RGB and PIL format
+            result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+            result_img = Image.fromarray(result_rgb)
+
+            # Update working image
+            self.working_image = result_img
+
+            # Update UI
+            self.update_display()
+
+            if clear_selection:
+                self.reset_selection()
+
+            # Update status with color info
+            color_hex = f"#{target_color[0]:02x}{target_color[1]:02x}{target_color[2]:02x}"
+            self.status_label.config(
+                text=f"Auto fill applied: {pixel_count} pixels matched (color: {color_hex}, tolerance: {tolerance}, border: {border_size}px)"
+            )
+
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            self.status_label.config(text=f"Error in auto fill: {str(e)}")
 
     def add_text_to_selection(self):
         """Add text to the selected area with interactive controls"""
