@@ -22,14 +22,8 @@ from card_editor.presets import (
     save_all_presets,
     save_preset,
 )
-from card_editor.tools import (
-    add_text_to_selection,
-    apply_auto_dark_fill_windowless,
-    apply_content_aware_fill,
-    load_image_to_selection,
-)
+from card_editor.tools import add_text_to_selection, apply_auto_dark_fill_windowless, load_image_to_selection
 from card_editor.ui import create_presets_panel, create_toolbar, display_image, draw_selection_rect
-from contentAwareFill.enhanced_content_aware_fill import EnhancedContentAwareFill
 
 
 class CardEditor:
@@ -55,7 +49,7 @@ class CardEditor:
         self.working_image = self.original_image.copy()
         self.display_image = None  # For zoomed/transformed image
 
-        self.fill_iterations_var = tk.IntVar(value=2)
+        self.fill_iterations_var = tk.IntVar(value=1)
 
         # Image metadata
         self.img_width, self.img_height = self.working_image.size
@@ -101,7 +95,7 @@ class CardEditor:
         self.coords_label.pack(side=tk.RIGHT, padx=5)
 
         # Set initial tool
-        self.current_tool = EditorTool.CONTENT_AWARE_FILL
+        self.current_tool = EditorTool.AUTO_FILL_TEXT
         self.selected_tool_button = None  # Track the currently selected tool button
 
         # Drawing state
@@ -115,9 +109,10 @@ class CardEditor:
         self.pan_start_x = 0
         self.pan_start_y = 0
 
-        # Eyedropper state
-        self.eyedropper_active = False
-        self.original_canvas_click = None
+        # Initialize variables for Auto Fill Text settings
+        self.text_color_var = tk.StringVar(value="#000000")  # Default black
+        self.color_detect_mode = tk.StringVar(value="dark")  # Default to detect dark
+        self.advanced_detection_var = tk.BooleanVar(value=True)  # Advanced detection of text
 
         # Presets variables
         self.presets = []
@@ -130,8 +125,8 @@ class CardEditor:
         # Display the image
         self.update_display()
 
-        # Initialize with PAN tool selected
-        self.set_tool(EditorTool.PAN)
+        # Initialize with AUTO_FILL_TEXT tool selected
+        self.set_tool(EditorTool.AUTO_FILL_TEXT)
 
     def create_toolbar(self):
         """Create the toolbar with editing tools"""
@@ -458,12 +453,8 @@ class CardEditor:
         if self.selected_tool_button:
             self.selected_tool_button.config(borderwidth=1, relief="raised")
 
-        if tool == EditorTool.SELECT:
-            self.selected_tool_button = self.select_btn
-        elif tool == EditorTool.PAN:
-            self.selected_tool_button = self.pan_btn
-        elif tool == EditorTool.CONTENT_AWARE_FILL:
-            self.selected_tool_button = self.fill_btn
+        if tool == EditorTool.AUTO_FILL_TEXT:
+            self.selected_tool_button = self.AUTO_FILL_TEXT_btn
         elif tool == EditorTool.ADD_TEXT:
             self.selected_tool_button = self.text_btn
         elif tool == EditorTool.LOAD_IMAGE:
@@ -490,8 +481,8 @@ class CardEditor:
             self.load_image_to_selection()
         elif tool == EditorTool.ADD_TEXT:
             self.add_text_to_selection()
-        elif tool == EditorTool.CONTENT_AWARE_FILL:
-            self.apply_content_aware_fill()
+        elif tool == EditorTool.AUTO_FILL_TEXT:
+            self.apply_auto_dark_fill()
 
     def process_all_zones(self):
         """Process all selected zones in sequence"""
@@ -556,13 +547,7 @@ class CardEditor:
             self.selected_tool_button.config(borderwidth=1, relief="raised")
 
         # Add border to newly selected button
-        if tool == EditorTool.SELECT:
-            self.selected_tool_button = self.select_btn
-        elif tool == EditorTool.PAN:
-            self.selected_tool_button = self.pan_btn
-        elif tool == EditorTool.CONTENT_AWARE_FILL:
-            self.selected_tool_button = self.fill_btn
-        elif tool == EditorTool.AUTO_FILL_TEXT:
+        if tool == EditorTool.AUTO_FILL_TEXT:
             self.selected_tool_button = self.AUTO_FILL_TEXT_btn
         elif tool == EditorTool.ADD_TEXT:
             self.selected_tool_button = self.text_btn
@@ -593,8 +578,6 @@ class CardEditor:
             self.canvas.config(cursor="fleur")
 
         elif self.current_tool in [
-            EditorTool.SELECT,
-            EditorTool.CONTENT_AWARE_FILL,
             EditorTool.AUTO_FILL_TEXT,
             EditorTool.LOAD_IMAGE,
             EditorTool.ADD_TEXT,
@@ -617,8 +600,6 @@ class CardEditor:
             self.canvas.scan_dragto(event.x, event.y, gain=1)
 
         elif self.current_tool in [
-            EditorTool.SELECT,
-            EditorTool.CONTENT_AWARE_FILL,
             EditorTool.AUTO_FILL_TEXT,
             EditorTool.LOAD_IMAGE,
             EditorTool.ADD_TEXT,
@@ -636,8 +617,6 @@ class CardEditor:
             self.canvas.config(cursor="")
 
         elif self.current_tool in [
-            EditorTool.SELECT,
-            EditorTool.CONTENT_AWARE_FILL,
             EditorTool.AUTO_FILL_TEXT,
             EditorTool.LOAD_IMAGE,
             EditorTool.ADD_TEXT,
@@ -654,9 +633,7 @@ class CardEditor:
                 self.selection_coords = (int(x1), int(y1), int(x2), int(y2))
 
                 # Automatically trigger appropriate action based on the selected tool
-                if self.current_tool == EditorTool.CONTENT_AWARE_FILL:
-                    self.apply_content_aware_fill()  # Auto-apply content-aware fill
-                elif self.current_tool == EditorTool.AUTO_FILL_TEXT:  # Add this case
+                if self.current_tool == EditorTool.AUTO_FILL_TEXT:
                     self.apply_auto_dark_fill()  # Auto-apply dark fill
                 elif self.current_tool == EditorTool.ADD_TEXT:
                     self.add_text_to_selection()
@@ -753,110 +730,30 @@ class CardEditor:
             messagebox.showinfo("No Selection", "Please select an area first")
             return
 
-        if self.current_tool == EditorTool.CONTENT_AWARE_FILL:
-            self.apply_content_aware_fill()
-        elif self.current_tool == EditorTool.AUTO_FILL_TEXT:
+        if self.current_tool == EditorTool.AUTO_FILL_TEXT:
             self.apply_auto_dark_fill()
         elif self.current_tool == EditorTool.ADD_TEXT:
             self.add_text_to_selection()
         elif self.current_tool == EditorTool.LOAD_IMAGE:
             self.load_image_to_selection()
 
-    def apply_content_aware_fill(self):
-        """Apply content-aware fill to the selected area"""
-        apply_content_aware_fill(self)
-
-    def apply_auto_dark_fill(editor, use_gui=False, iterations=2):
+    def apply_auto_dark_fill(self, use_gui=False):
         """
         Apply auto dark content-aware fill to the selected area
 
         Args:
-            editor: CardEditor instance
             use_gui: Whether to use the GUI or the windowless implementation
-            iterations: Number of fill iterations to perform (default: 2)
         """
-        if not editor.selection_coords:
+        if not self.selection_coords:
             return
 
         # Record state before applying auto fill
-        if hasattr(editor, "record_state"):
-            editor.record_state("Before auto fill text")
+        if hasattr(self, "record_state"):
+            self.record_state("Before auto fill text")
 
-        if use_gui:
-            # Create the enhanced fill dialog with explicit auto-apply
-            def on_apply(description):
-                if hasattr(editor, "record_state"):
-                    editor.record_state(description)
-
-            fill_handler = EnhancedContentAwareFill(editor, editor.selection_coords, on_apply_callback=on_apply)
-
-            # Set the iterations value in the UI if it exists
-            if hasattr(fill_handler, "iterations_var"):
-                fill_handler.iterations_var.set(iterations)
-
-            # Call the auto_apply_dark_fill method directly
-            # We need to wait a bit for the dialog to initialize
-            fill_handler.fill_dialog.after(100, fill_handler.auto_apply_dark_fill)
-        else:
-            # Use the windowless implementation with specified iterations
-            iterations = editor.fill_iterations_var.get()
-            apply_auto_dark_fill_windowless(editor, clear_selection=True, iterations=iterations)
-
-    def pick_text_color(self):
-        """Open color picker for text color"""
-        color = colorchooser.askcolor(self.text_color_var.get())[1]
-        if color:
-            self.text_color_var.set(color)
-            self.color_button.config(bg=color)
-
-    def activate_text_eyedropper(self):
-        """Activate the eyedropper tool to sample text color from the image"""
-        self.eyedropper_active = True
-        self.root.grab_release()  # Allow interaction with main window
-        self.canvas.config(cursor="crosshair")
-        self.status_label.config(text="Click on text in image to sample color")
-
-        # Store original binding
-        self.original_canvas_click = self.canvas.bind("<Button-1>")
-
-        # Create a new binding for color sampling
-        def sample_color(event):
-            if not self.eyedropper_active:
-                return
-
-            # Calculate image coordinates from canvas coordinates
-            canvas_x = self.canvas.canvasx(event.x)
-            canvas_y = self.canvas.canvasy(event.y)
-            image_x = int(canvas_x / self.zoom_factor)
-            image_y = int(canvas_y / self.zoom_factor)
-
-            # Check if within image bounds
-            if 0 <= image_x < self.img_width and 0 <= image_y < self.img_height:
-                # Get color at this position
-                try:
-                    rgb = self.working_image.getpixel((image_x, image_y))[:3]
-                    hex_color = f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
-
-                    # Update UI
-                    self.text_color_var.set(hex_color)
-                    self.color_button.config(bg=hex_color)
-
-                    # Switch to custom color mode
-                    self.color_detect_mode.set("custom")
-
-                    # Reset cursor and binding
-                    self.canvas.config(cursor="")
-                    self.eyedropper_active = False
-
-                    # Restore original binding
-                    self.canvas.bind("<Button-1>", self.original_canvas_click)
-
-                    self.status_label.config(text=f"Text color sampled: {hex_color}")
-                except Exception as e:
-                    print(f"Error sampling color: {e}")
-
-        # Set temporary binding
-        self.canvas.bind("<Button-1>", sample_color)
+        # Use the windowless implementation with specified iterations
+        iterations = self.fill_iterations_var.get()
+        apply_auto_dark_fill_windowless(self, clear_selection=True, iterations=iterations)
 
     def add_text_to_selection(self):
         """Add text to the selected area with interactive controls"""
@@ -903,7 +800,6 @@ class CardEditor:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to save image: {str(e)}")
 
-    # Replace the undo method:
     def undo(self, event=None):
         """Undo the last operation"""
         if not self.history.can_undo():
@@ -921,7 +817,6 @@ class CardEditor:
         self.update_display()
         self.status_label.config(text=f"Undone: {description}")
 
-    # Add method to record state:
     def record_state(self, description):
         """
         Record the current state in history

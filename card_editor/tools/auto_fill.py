@@ -195,14 +195,13 @@ def apply_auto_dark_fill_windowless(editor, clear_selection=True, iterations=2):
             tolerance = editor.fill_tolerance_var.get()
             border_size = editor.fill_border_var.get()
             use_advanced = editor.advanced_detection_var.get()
-            
+
             # Get inpainting method - default to "telea" if not defined
-            inpainting_method = getattr(editor, "inpainting_method_var", tk.StringVar(value="telea")).get() if hasattr(editor, "inpainting_method_var") else "telea"
-            
-            # For backward compatibility
-            use_patchmatch = hasattr(editor, "use_patchmatch_var") and editor.use_patchmatch_var.get()
-            if use_patchmatch and inpainting_method == "telea":
-                inpainting_method = "patchmatch"
+            inpainting_method = (
+                getattr(editor, "inpainting_method_var", tk.StringVar(value="telea")).get()
+                if hasattr(editor, "inpainting_method_var")
+                else "telea"
+            )
 
             print(
                 f"DEBUG - Settings: tolerance={tolerance}, border_size={border_size}, use_advanced={use_advanced}, inpainting_method={inpainting_method}"
@@ -352,7 +351,7 @@ def apply_auto_dark_fill_windowless(editor, clear_selection=True, iterations=2):
                 result_img_array = apply_lama_inpainting(img_np, mask)
                 result_img = Image.fromarray(result_img_array)
                 fill_method = "LaMa"
-            elif inpainting_method == "ns":
+            elif inpainting_method == "opencv_ns":
                 # Use OpenCV's Navier-Stokes inpainting
                 print("DEBUG - Using OpenCV Navier-Stokes inpainting")
                 result_img_array = apply_opencv_ns_inpainting(img_np, mask)
@@ -503,63 +502,88 @@ def apply_patchmatch_inpainting(image_np, mask, patch_size=7, iterations=10):
 def apply_lama_inpainting(image_np, mask):
     """
     Apply LaMa (Large Mask Inpainting) to the image.
-    
+
     Args:
         image_np: Numpy array of the image
         mask: Binary mask where 255 indicates areas to fill (uint8 array)
-        
+
     Returns:
         Numpy array of the filled image
     """
     try:
-        from simple_lama_inpainting import SimpleLama
         from PIL import Image as PILImage
-        
+
+        from simple_lama_inpainting import SimpleLama
+
         print("DEBUG - Using LaMa inpainting")
-        
-        # Convert numpy array to PIL Image
-        if len(image_np.shape) == 3 and image_np.shape[2] == 4:
-            # RGBA image
-            image_pil = PILImage.fromarray(image_np)
-        elif len(image_np.shape) == 3 and image_np.shape[2] == 3:
-            # RGB image
-            image_pil = PILImage.fromarray(image_np)
+
+        # Save original dimensions and format for later
+        original_height, original_width = image_np.shape[:2]
+        original_is_rgba = len(image_np.shape) == 3 and image_np.shape[2] == 4
+        print(f"DEBUG - Original image dimensions: {original_width}x{original_height}")
+
+        # Convert numpy array to PIL Image, ensuring RGB format (not RGBA)
+        if len(image_np.shape) == 3:
+            if image_np.shape[2] == 4:
+                # RGBA image - convert to RGB
+                print("DEBUG - Converting RGBA to RGB")
+                image_pil = PILImage.fromarray(image_np).convert("RGB")
+            elif image_np.shape[2] == 3:
+                # RGB image
+                print("DEBUG - Using RGB image")
+                image_pil = PILImage.fromarray(image_np)
+            else:
+                # Other multichannel format - convert to RGB
+                print(f"DEBUG - Converting {image_np.shape[2]}-channel image to RGB")
+                temp_array = np.stack([image_np[:, :, 0]] * 3, axis=2) if image_np.shape[2] == 1 else image_np[:, :, :3]
+                image_pil = PILImage.fromarray(temp_array.astype(np.uint8)).convert("RGB")
         else:
             # Grayscale image - convert to RGB
-            if len(image_np.shape) == 2:
-                rgb_array = np.stack([image_np] * 3, axis=2)
-                image_pil = PILImage.fromarray(rgb_array.astype(np.uint8))
-            else:
-                image_pil = PILImage.fromarray(image_np)
-            
-        # Convert mask to PIL Image
-        # LaMa expects a binary mask where white (255) indicates areas to fill
-        mask_pil = PILImage.fromarray(mask).convert('L')
-        
+            print("DEBUG - Converting grayscale to RGB")
+            image_pil = PILImage.fromarray(image_np).convert("RGB")
+
+        # Ensure mask has same dimensions as image
+        mask_pil = PILImage.fromarray((mask > 0).astype(np.uint8) * 255).convert("L")
+
+        # Ensure mask has exact same dimensions as the image
+        if mask_pil.size != image_pil.size:
+            print(f"DEBUG - Resizing mask from {mask_pil.size} to {image_pil.size}")
+            mask_pil = mask_pil.resize(image_pil.size, PILImage.NEAREST)
+
         print(f"DEBUG - Image for LaMa: {image_pil.mode}, {image_pil.size}")
-        print(f"DEBUG - Mask for LaMa: {mask_pil.mode}, {mask_pil.size}, min={np.min(mask)}, max={np.max(mask)}")
-        
+        print(f"DEBUG - Mask for LaMa: {mask_pil.mode}, {mask_pil.size}")
+
         # Initialize LaMa model
-        simple_lama = SimpleLama()
-        
+        simple_lama = SimpleLama(device="cpu")
+
         # Apply inpainting
         result_pil = simple_lama(image_pil, mask_pil)
-        
+
+        # Ensure result has the original dimensions
+        if result_pil.size != (original_width, original_height):
+            print(f"DEBUG - Resizing result from {result_pil.size} to {(original_width, original_height)}")
+            result_pil = result_pil.resize((original_width, original_height), PILImage.LANCZOS)
+
         # Convert back to numpy array
         result_np = np.array(result_pil)
-        
+        print(f"DEBUG - Result shape: {result_np.shape}, Original shape: {image_np.shape[:2]}")
+
         # If original was RGBA, preserve alpha channel
-        if len(image_np.shape) == 3 and image_np.shape[2] == 4:
-            result_rgba = np.zeros_like(image_np)
-            result_rgba[:, :, :3] = result_np[:, :, :3]  # Assuming result_np is RGB
-            result_rgba[:, :, 3] = image_np[:, :, 3]     # Alpha from original
+        if original_is_rgba:
+            print("DEBUG - Preserving alpha channel from original image")
+            result_rgba = np.zeros((original_height, original_width, 4), dtype=np.uint8)
+            result_rgba[:, :, :3] = result_np[:original_height, :original_width, :3]  # Ensuring dimensions match
+            result_rgba[:, :, 3] = image_np[:, :, 3]  # Alpha from original
             return result_rgba
-            
+
         return result_np
-        
+
     except Exception as e:
         print(f"DEBUG - LaMa inpainting error: {str(e)}")
-        
+        import traceback
+
+        traceback.print_exc()
+
         # Fall back to OpenCV Telea algorithm
         print("DEBUG - Falling back to OpenCV inpainting (Telea method)")
         return apply_opencv_telea_inpainting(image_np, mask)
@@ -568,16 +592,16 @@ def apply_lama_inpainting(image_np, mask):
 def apply_opencv_telea_inpainting(image_np, mask):
     """
     Apply OpenCV's Telea inpainting algorithm to the image.
-    
+
     Args:
         image_np: Numpy array of the image
         mask: Binary mask where 255 indicates areas to fill (uint8 array)
-        
+
     Returns:
         Numpy array of the filled image
     """
     print("DEBUG - Using OpenCV Telea inpainting")
-    
+
     # Convert to BGR format for OpenCV
     if len(image_np.shape) == 3 and image_np.shape[2] == 4:
         img_cv = cv2.cvtColor(image_np[:, :, :3], cv2.COLOR_RGB2BGR)  # RGBA to BGR
@@ -585,36 +609,36 @@ def apply_opencv_telea_inpainting(image_np, mask):
         img_cv = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)  # RGB to BGR
     else:
         img_cv = cv2.cvtColor(image_np, cv2.COLOR_GRAY2BGR)  # Grayscale to BGR
-        
+
     # Apply inpainting
     result = cv2.inpaint(img_cv, mask, 5, cv2.INPAINT_TELEA)
-    
+
     # Convert back to RGB
     result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
-    
+
     # If original was RGBA, preserve alpha channel
     if len(image_np.shape) == 3 and image_np.shape[2] == 4:
         result_rgba = np.zeros_like(image_np)
         result_rgba[:, :, :3] = result_rgb
         result_rgba[:, :, 3] = image_np[:, :, 3]
         return result_rgba
-        
+
     return result_rgb
 
 
 def apply_opencv_ns_inpainting(image_np, mask):
     """
     Apply OpenCV's Navier-Stokes inpainting algorithm to the image.
-    
+
     Args:
         image_np: Numpy array of the image
         mask: Binary mask where 255 indicates areas to fill (uint8 array)
-        
+
     Returns:
         Numpy array of the filled image
     """
     print("DEBUG - Using OpenCV Navier-Stokes inpainting")
-    
+
     # Convert to BGR format for OpenCV
     if len(image_np.shape) == 3 and image_np.shape[2] == 4:
         img_cv = cv2.cvtColor(image_np[:, :, :3], cv2.COLOR_RGB2BGR)  # RGBA to BGR
@@ -622,18 +646,18 @@ def apply_opencv_ns_inpainting(image_np, mask):
         img_cv = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)  # RGB to BGR
     else:
         img_cv = cv2.cvtColor(image_np, cv2.COLOR_GRAY2BGR)  # Grayscale to BGR
-        
+
     # Apply inpainting with Navier-Stokes method
     result = cv2.inpaint(img_cv, mask, 3, cv2.INPAINT_NS)
-    
+
     # Convert back to RGB
     result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
-    
+
     # If original was RGBA, preserve alpha channel
     if len(image_np.shape) == 3 and image_np.shape[2] == 4:
         result_rgba = np.zeros_like(image_np)
         result_rgba[:, :, :3] = result_rgb
         result_rgba[:, :, 3] = image_np[:, :, 3]
         return result_rgba
-        
+
     return result_rgb

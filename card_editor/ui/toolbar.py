@@ -45,17 +45,7 @@ def create_toolbar(editor):
     tools_frame = ttk.LabelFrame(toolbar, text="Tools")
     tools_frame.pack(fill="x", padx=5, pady=5)
 
-    # Using tk.Button instead of ttk.Button for better border control
-    editor.select_btn = tk.Button(tools_frame, text="Select", command=lambda: editor.set_tool(EditorTool.SELECT))
-    editor.select_btn.pack(fill="x", pady=2)
-
-    editor.pan_btn = tk.Button(tools_frame, text="Pan", command=lambda: editor.set_tool(EditorTool.PAN))
-    editor.pan_btn.pack(fill="x", pady=2)
-
-    editor.fill_btn = tk.Button(
-        tools_frame, text="Content-Aware Fill", command=lambda: editor.set_tool(EditorTool.CONTENT_AWARE_FILL)
-    )
-    editor.fill_btn.pack(fill="x", pady=2)
+    # Note: Select, Pan, and Content-Aware Fill buttons have been removed
 
     # Auto Fill Text button
     editor.AUTO_FILL_TEXT_btn = tk.Button(
@@ -70,10 +60,10 @@ def create_toolbar(editor):
     # Initialize variables for Auto Fill Text settings
     editor.text_color_var = tk.StringVar(value="#000000")  # Default black
     editor.color_detect_mode = tk.StringVar(value="dark")  # Default to detect dark
-    editor.fill_tolerance_var = tk.IntVar(value=80)  # Default tolerance 80
-    editor.fill_border_var = tk.IntVar(value=3)  # Default border 3px
+    editor.fill_tolerance_var = tk.IntVar(value=120)  # Default tolerance 120 (updated)
+    editor.fill_border_var = tk.IntVar(value=2)  # Default border 2px (updated)
     editor.advanced_detection_var = tk.BooleanVar(value=True)  # Advanced detection of text
-    editor.fill_iterations_var = tk.IntVar(value=2)  # Default iterations 2
+    editor.fill_iterations_var = tk.IntVar(value=1)  # Default iterations 1 (updated)
 
     # Toggle button for expanding/collapsing the settings
     editor.toggle_settings_btn = ttk.Button(
@@ -81,36 +71,7 @@ def create_toolbar(editor):
     )
     editor.toggle_settings_btn.pack(fill="x", pady=2)
 
-    # Color detection mode frame
-    detect_frame = ttk.LabelFrame(editor.auto_fill_settings_frame, text="Detection Mode")
-    detect_frame.pack(fill="x", pady=2, padx=5)
-
-    ttk.Radiobutton(detect_frame, text="Detect Dark Colors", variable=editor.color_detect_mode, value="dark").pack(
-        anchor="w", padx=5, pady=2
-    )
-
-    ttk.Radiobutton(detect_frame, text="Detect Light Colors", variable=editor.color_detect_mode, value="light").pack(
-        anchor="w", padx=5, pady=2
-    )
-
-    ttk.Radiobutton(detect_frame, text="Select Specific Color", variable=editor.color_detect_mode, value="custom").pack(
-        anchor="w", padx=5, pady=2
-    )
-
-    # Custom text color selection
-    color_frame = ttk.Frame(editor.auto_fill_settings_frame)
-    color_frame.pack(fill="x", pady=2, padx=5)
-
-    ttk.Label(color_frame, text="Text Color:").pack(side=tk.LEFT, padx=(0, 5))
-
-    editor.color_button = tk.Button(
-        color_frame, bg=editor.text_color_var.get(), width=3, command=editor.pick_text_color
-    )
-    editor.color_button.pack(side=tk.LEFT, padx=5)
-
-    # Add eyedropper button
-    eyedropper_btn = ttk.Button(color_frame, text="🔍", width=3, command=editor.activate_text_eyedropper)
-    eyedropper_btn.pack(side=tk.LEFT, padx=5)
+    # Note: Detection Mode frame, Text Color selection, and Eyedropper have been removed
 
     # Detection options
     detection_frame = ttk.LabelFrame(editor.auto_fill_settings_frame, text="Detection Options")
@@ -161,73 +122,34 @@ def create_toolbar(editor):
         iterations_frame, text="Multiple passes for better results", font=("TkDefaultFont", 8), foreground="gray"
     ).pack(side=tk.LEFT, padx=5, pady=0)
 
-    # Add this to the create_toolbar function after the iterations_frame section:
+    # Add inpainting method selection instead of the PatchMatch checkbox
+    editor.inpainting_method_var = tk.StringVar(value="lama")  # Default to lama
+    inpainting_frame = ttk.LabelFrame(editor.auto_fill_settings_frame, text="Inpainting Method")
+    inpainting_frame.pack(fill="x", pady=2, padx=5)
 
-    # Add PatchMatch checkbox
-    editor.use_patchmatch_var = tk.BooleanVar(value=False)  # Default to not use PatchMatch
-    patchmatch_frame = ttk.Frame(editor.auto_fill_settings_frame)
-    patchmatch_frame.pack(fill="x", pady=2, padx=5)
+    ttk.Radiobutton(
+        inpainting_frame, text="OpenCV Telea", variable=editor.inpainting_method_var, value="opencv_telea"
+    ).pack(anchor="w", padx=5, pady=2)
 
-    patchmatch_checkbox = ttk.Checkbutton(
-        patchmatch_frame,
-        text="Use PatchMatch inpainting",
-        variable=editor.use_patchmatch_var,
-        command=lambda: toggle_patchmatch_options(editor),
+    ttk.Radiobutton(inpainting_frame, text="OpenCV NS", variable=editor.inpainting_method_var, value="opencv_ns").pack(
+        anchor="w", padx=5, pady=2
     )
-    patchmatch_checkbox.pack(anchor="w", padx=5, pady=2)
+
+    ttk.Radiobutton(
+        inpainting_frame, text="Patch Match", variable=editor.inpainting_method_var, value="patchmatch"
+    ).pack(anchor="w", padx=5, pady=2)
+
+    ttk.Radiobutton(inpainting_frame, text="LaMa", variable=editor.inpainting_method_var, value="lama").pack(
+        anchor="w", padx=5, pady=2
+    )
 
     # Add explanation text
     ttk.Label(
-        patchmatch_frame, text="For more seamless, texture-aware fills", font=("TkDefaultFont", 8), foreground="gray"
+        inpainting_frame,
+        text="Select the algorithm used for filling text areas",
+        font=("TkDefaultFont", 8),
+        foreground="gray",
     ).pack(anchor="w", padx=20, pady=0)
-
-    # Create a frame for PatchMatch options (initially hidden)
-    editor.patchmatch_options_frame = ttk.Frame(editor.auto_fill_settings_frame)
-
-    # Initialize variables for PatchMatch settings
-    editor.patchmatch_patch_size_var = tk.IntVar(value=7)  # Default patch size
-    editor.patchmatch_iterations_var = tk.IntVar(value=10)  # Default iterations
-
-    # Patch size setting
-    patch_size_frame = ttk.Frame(editor.patchmatch_options_frame)
-    patch_size_frame.pack(fill="x", pady=2, padx=5)
-
-    ttk.Label(patch_size_frame, text="Patch Size:").pack(side=tk.LEFT, padx=(0, 5))
-
-    patch_size_spinbox = ttk.Spinbox(
-        patch_size_frame, from_=3, to=15, textvariable=editor.patchmatch_patch_size_var, width=5
-    )
-    patch_size_spinbox.pack(side=tk.LEFT)
-
-    ttk.Label(
-        patch_size_frame, text="(larger = better quality, slower)", font=("TkDefaultFont", 8), foreground="gray"
-    ).pack(side=tk.LEFT, padx=5)
-
-    # PatchMatch iterations setting
-    pm_iterations_frame = ttk.Frame(editor.patchmatch_options_frame)
-    pm_iterations_frame.pack(fill="x", pady=2, padx=5)
-
-    ttk.Label(pm_iterations_frame, text="PM Iterations:").pack(side=tk.LEFT, padx=(0, 5))
-
-    pm_iterations_spinbox = ttk.Spinbox(
-        pm_iterations_frame, from_=5, to=20, textvariable=editor.patchmatch_iterations_var, width=5
-    )
-    pm_iterations_spinbox.pack(side=tk.LEFT)
-
-    ttk.Label(
-        pm_iterations_frame, text="(more = better quality, slower)", font=("TkDefaultFont", 8), foreground="gray"
-    ).pack(side=tk.LEFT, padx=5)
-
-    # Function to toggle PatchMatch options visibility
-    def toggle_patchmatch_options(editor):
-        if editor.use_patchmatch_var.get():
-            editor.patchmatch_options_frame.pack(fill="x", padx=5, pady=2)
-        else:
-            editor.patchmatch_options_frame.pack_forget()
-
-    # Initially hide PatchMatch options if not checked
-    if not editor.use_patchmatch_var.get():
-        editor.patchmatch_options_frame.pack_forget()
 
     # Other tools continue below
     editor.text_btn = tk.Button(tools_frame, text="Add Text", command=lambda: editor.set_tool(EditorTool.ADD_TEXT))
@@ -248,10 +170,6 @@ def create_toolbar(editor):
 
     editor.undo_btn = ttk.Button(actions_frame, text="Undo (Ctrl+Z)", command=editor.undo)
     editor.undo_btn.pack(fill="x", pady=2)
-
-    # Then place the reset button after it:
-    editor.reset_btn = ttk.Button(actions_frame, text="Reset Selection", command=editor.reset_selection)
-    editor.reset_btn.pack(fill="x", pady=2)
 
     editor.reset_btn = ttk.Button(actions_frame, text="Reset Selection", command=editor.reset_selection)
     editor.reset_btn.pack(fill="x", pady=2)
