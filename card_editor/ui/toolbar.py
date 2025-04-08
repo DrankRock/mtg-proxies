@@ -22,20 +22,21 @@ def create_toolbar(editor):
     zoom_frame = ttk.LabelFrame(toolbar, text="Zoom")
     zoom_frame.pack(fill="x", padx=5, pady=5)
 
-    editor.zoom_in_btn = ttk.Button(zoom_frame, text="Zoom In", command=editor.zoom_in)
+    # Use lambda functions to avoid method reference issues during initialization
+    editor.zoom_in_btn = ttk.Button(zoom_frame, text="Zoom In", command=lambda: editor.zoom_in())
     editor.zoom_in_btn.pack(fill="x", pady=2)
 
-    editor.zoom_out_btn = ttk.Button(zoom_frame, text="Zoom Out", command=editor.zoom_out)
+    editor.zoom_out_btn = ttk.Button(zoom_frame, text="Zoom Out", command=lambda: editor.zoom_out())
     editor.zoom_out_btn.pack(fill="x", pady=2)
 
-    editor.zoom_fit_btn = ttk.Button(zoom_frame, text="Fit to Window", command=editor.zoom_fit)
+    editor.zoom_fit_btn = ttk.Button(zoom_frame, text="Fit to Window", command=lambda: editor.zoom_fit())
     editor.zoom_fit_btn.pack(fill="x", pady=2)
 
-    editor.zoom_actual_btn = ttk.Button(zoom_frame, text="Actual Size (100%)", command=editor.zoom_actual)
+    editor.zoom_actual_btn = ttk.Button(zoom_frame, text="Actual Size (100%)", command=lambda: editor.zoom_actual())
     editor.zoom_actual_btn.pack(fill="x", pady=2)
 
     # Fullscreen toggle
-    editor.fullscreen_btn = ttk.Button(toolbar, text="Toggle Fullscreen", command=editor.toggle_fullscreen)
+    editor.fullscreen_btn = ttk.Button(toolbar, text="Toggle Fullscreen", command=lambda: editor.toggle_fullscreen())
     editor.fullscreen_btn.pack(fill="x", padx=5, pady=5)
 
     # Tools separator
@@ -44,8 +45,6 @@ def create_toolbar(editor):
     # Tool selection
     tools_frame = ttk.LabelFrame(toolbar, text="Tools")
     tools_frame.pack(fill="x", padx=5, pady=5)
-
-    # Note: Select, Pan, and Content-Aware Fill buttons have been removed
 
     # Auto Fill Text button
     editor.AUTO_FILL_TEXT_btn = tk.Button(
@@ -65,13 +64,136 @@ def create_toolbar(editor):
     editor.advanced_detection_var = tk.BooleanVar(value=True)  # Advanced detection of text
     editor.fill_iterations_var = tk.IntVar(value=1)  # Default iterations 1 (updated)
 
+    # Initialize selection mode variable
+    editor.selection_mode_var = tk.StringVar(value="rectangle")  # Default to rectangle selection
+    editor.brush_size_var = tk.IntVar(value=20)  # Default brush size 20px
+
     # Toggle button for expanding/collapsing the settings
     editor.toggle_settings_btn = ttk.Button(
-        tools_frame, text="▼ Auto Fill Settings", command=editor.toggle_auto_fill_settings
+        tools_frame, text="▼ Auto Fill Settings", command=lambda: editor.toggle_auto_fill_settings()
     )
     editor.toggle_settings_btn.pack(fill="x", pady=2)
 
-    # Note: Detection Mode frame, Text Color selection, and Eyedropper have been removed
+    # Add Selection Mode frame to auto_fill_settings_frame
+    selection_mode_frame = ttk.LabelFrame(editor.auto_fill_settings_frame, text="Selection Mode")
+    selection_mode_frame.pack(fill="x", pady=2, padx=5)
+
+    # Create button frame for selection mode options
+    button_frame = ttk.Frame(selection_mode_frame)
+    button_frame.pack(fill="x", pady=2)
+
+    # Try to load icons
+    try:
+        import os
+
+        from PIL import Image, ImageTk
+
+        # Get resources path (relative to the ui folder)
+        resources_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources")
+
+        # Load icons
+        rectangle_dark = ImageTk.PhotoImage(Image.open(os.path.join(resources_path, "rectangle_select_dark.ico")))
+        rectangle_light = ImageTk.PhotoImage(Image.open(os.path.join(resources_path, "rectangle_select.ico")))
+        spot_healing_dark = ImageTk.PhotoImage(Image.open(os.path.join(resources_path, "spot_healing_dark.ico")))
+        spot_healing_light = ImageTk.PhotoImage(Image.open(os.path.join(resources_path, "spot_healing.ico")))
+
+        # Store references to icons
+        editor.rectangle_dark_icon = rectangle_dark
+        editor.rectangle_light_icon = rectangle_light
+        editor.spot_healing_dark_icon = spot_healing_dark
+        editor.spot_healing_light_icon = spot_healing_light
+
+        icons_loaded = True
+    except Exception as e:
+        print(f"Failed to load icons: {e}")
+        icons_loaded = False
+
+    # Function to update button appearance based on selection
+    def update_selection_buttons():
+        current_mode = editor.selection_mode_var.get()
+
+        if icons_loaded:
+            # Update rectangle button
+            if current_mode == "rectangle":
+                editor.rectangle_btn.config(bg="gray", image=editor.rectangle_light_icon)
+            else:
+                editor.rectangle_btn.config(bg=editor.root.cget("bg"), image=editor.rectangle_dark_icon)
+
+            # Update spot healing button
+            if current_mode == "spot_healing":
+                editor.spot_healing_btn.config(bg="gray", image=editor.spot_healing_light_icon)
+            else:
+                editor.spot_healing_btn.config(bg=editor.root.cget("bg"), image=editor.spot_healing_dark_icon)
+        else:
+            # Text fallback if icons failed to load
+            if current_mode == "rectangle":
+                editor.rectangle_btn.config(bg="gray", fg="white")
+            else:
+                editor.rectangle_btn.config(bg=editor.root.cget("bg"), fg="black")
+
+            if current_mode == "spot_healing":
+                editor.spot_healing_btn.config(bg="gray", fg="white")
+            else:
+                editor.spot_healing_btn.config(bg=editor.root.cget("bg"), fg="black")
+
+        # Show/hide brush size control based on selection mode
+        if current_mode == "spot_healing":
+            editor.brush_size_frame.pack(fill="x", pady=2, padx=5)
+        else:
+            editor.brush_size_frame.pack_forget()
+
+    # Create selection mode buttons
+    if icons_loaded:
+        editor.rectangle_btn = tk.Button(
+            button_frame,
+            image=editor.rectangle_dark_icon,
+            command=lambda: [editor.selection_mode_var.set("rectangle"), update_selection_buttons()],
+        )
+        editor.spot_healing_btn = tk.Button(
+            button_frame,
+            image=editor.spot_healing_dark_icon,
+            command=lambda: [editor.selection_mode_var.set("spot_healing"), update_selection_buttons()],
+        )
+    else:
+        # Fallback to text buttons
+        editor.rectangle_btn = tk.Button(
+            button_frame,
+            text="Rectangle",
+            command=lambda: [editor.selection_mode_var.set("rectangle"), update_selection_buttons()],
+        )
+        editor.spot_healing_btn = tk.Button(
+            button_frame,
+            text="Spot Healing",
+            command=lambda: [editor.selection_mode_var.set("spot_healing"), update_selection_buttons()],
+        )
+
+    # Pack buttons side by side
+    editor.rectangle_btn.pack(side=tk.LEFT, padx=5, pady=2)
+    editor.spot_healing_btn.pack(side=tk.LEFT, padx=5, pady=2)
+
+    # Add label explaining the selection modes
+    ttk.Label(
+        selection_mode_frame,
+        text="Rectangle: Draw selection box | Spot healing: Use brush",
+        font=("TkDefaultFont", 8),
+        foreground="gray",
+    ).pack(anchor="w", padx=5, pady=2)
+
+    # Create brush size control frame (hidden by default for rectangle mode)
+    editor.brush_size_frame = ttk.Frame(editor.auto_fill_settings_frame)
+
+    # Add brush size control widgets
+    brush_size_inner_frame = ttk.Frame(editor.brush_size_frame)
+    brush_size_inner_frame.pack(fill="x")
+
+    ttk.Label(brush_size_inner_frame, text="Brush Size:").pack(side=tk.LEFT, padx=(0, 5))
+    brush_size_spinbox = ttk.Spinbox(
+        brush_size_inner_frame, from_=1, to=100, textvariable=editor.brush_size_var, width=5
+    )
+    brush_size_spinbox.pack(side=tk.LEFT)
+
+    # Initialize button appearance
+    update_selection_buttons()
 
     # Detection options
     detection_frame = ttk.LabelFrame(editor.auto_fill_settings_frame, text="Detection Options")
@@ -165,13 +287,13 @@ def create_toolbar(editor):
     actions_frame = ttk.LabelFrame(toolbar, text="Actions")
     actions_frame.pack(fill="x", padx=5, pady=5)
 
-    editor.apply_btn = ttk.Button(actions_frame, text="Apply Changes", command=editor.apply_tool)
+    editor.apply_btn = ttk.Button(actions_frame, text="Apply Changes", command=lambda: editor.apply_tool())
     editor.apply_btn.pack(fill="x", pady=2)
 
-    editor.undo_btn = ttk.Button(actions_frame, text="Undo (Ctrl+Z)", command=editor.undo)
+    editor.undo_btn = ttk.Button(actions_frame, text="Undo (Ctrl+Z)", command=lambda: editor.undo())
     editor.undo_btn.pack(fill="x", pady=2)
 
-    editor.reset_btn = ttk.Button(actions_frame, text="Reset Selection", command=editor.reset_selection)
+    editor.reset_btn = ttk.Button(actions_frame, text="Reset Selection", command=lambda: editor.reset_selection())
     editor.reset_btn.pack(fill="x", pady=2)
 
     # File operations separator
@@ -181,13 +303,13 @@ def create_toolbar(editor):
     file_frame = ttk.LabelFrame(toolbar, text="File")
     file_frame.pack(fill="x", padx=5, pady=5)
 
-    editor.save_btn = ttk.Button(file_frame, text="Save", command=editor.save_image)
+    editor.save_btn = ttk.Button(file_frame, text="Save", command=lambda: editor.save_image())
     editor.save_btn.pack(fill="x", pady=2)
 
-    editor.save_as_btn = ttk.Button(file_frame, text="Save As...", command=editor.save_image_as)
+    editor.save_as_btn = ttk.Button(file_frame, text="Save As...", command=lambda: editor.save_image_as())
     editor.save_as_btn.pack(fill="x", pady=2)
 
-    editor.close_btn = ttk.Button(file_frame, text="Close", command=editor.close_editor)
+    editor.close_btn = ttk.Button(file_frame, text="Close", command=lambda: editor.close_editor())
     editor.close_btn.pack(fill="x", pady=2)
 
     return toolbar

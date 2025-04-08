@@ -568,80 +568,185 @@ class CardEditor:
 
     def on_mouse_down(self, event):
         """Handle mouse button press"""
-        # Get canvas coordinates
         self.start_x = self.canvas.canvasx(event.x)
         self.start_y = self.canvas.canvasy(event.y)
 
         if self.current_tool == EditorTool.PAN:
-            self.pan_start_x = self.canvas.canvasx(event.x)
-            self.pan_start_y = self.canvas.canvasy(event.y)
+            self.pan_start_x = self.start_x
+            self.pan_start_y = self.start_y
             self.canvas.config(cursor="fleur")
 
-        elif self.current_tool in [
-            EditorTool.AUTO_FILL_TEXT,
-            EditorTool.LOAD_IMAGE,
-            EditorTool.ADD_TEXT,
-        ]:
-            # Start a new selection
+        elif self.current_tool in [EditorTool.AUTO_FILL_TEXT, EditorTool.LOAD_IMAGE, EditorTool.ADD_TEXT]:
             if self.selection_rect:
                 self.canvas.delete(self.selection_rect)
+
+            if self.current_tool == EditorTool.AUTO_FILL_TEXT and hasattr(self, "selection_mode_var"):
+                selection_mode = self.selection_mode_var.get()
+
+                if selection_mode == "spot_healing":
+                    # Initialize brush tracking variables
+                    self.brush_points = []
+                    self.brush_strokes = []
+                    self.last_brush_point = (self.start_x, self.start_y)
+                    brush_radius = int(self.brush_size_var.get() * self.zoom_factor)
+
+                    # Create initial brush stroke
+                    initial_stroke = self.canvas.create_oval(
+                        self.start_x - brush_radius,
+                        self.start_y - brush_radius,
+                        self.start_x + brush_radius,
+                        self.start_y + brush_radius,
+                        outline="red",
+                        width=2,
+                    )
+                    self.brush_strokes.append(initial_stroke)
+                    self.brush_points.append((self.start_x / self.zoom_factor, self.start_y / self.zoom_factor))
+                    return
+
+            # Default rectangle initialization
             self.selection_rect = self.canvas.create_rectangle(
                 self.start_x, self.start_y, self.start_x, self.start_y, outline="red", width=2, dash=(4, 4)
             )
 
     def on_mouse_drag(self, event):
         """Handle mouse drag"""
-        # Get current canvas coordinates
         cur_x = self.canvas.canvasx(event.x)
         cur_y = self.canvas.canvasy(event.y)
 
         if self.current_tool == EditorTool.PAN:
-            # Pan the canvas
             self.canvas.scan_dragto(event.x, event.y, gain=1)
 
-        elif self.current_tool in [
-            EditorTool.AUTO_FILL_TEXT,
-            EditorTool.LOAD_IMAGE,
-            EditorTool.ADD_TEXT,
-        ]:
-            # Update selection rectangle
+        elif self.current_tool in [EditorTool.AUTO_FILL_TEXT, EditorTool.LOAD_IMAGE, EditorTool.ADD_TEXT]:
+            if self.current_tool == EditorTool.AUTO_FILL_TEXT and hasattr(self, "selection_mode_var"):
+                selection_mode = self.selection_mode_var.get()
+
+                if selection_mode == "spot_healing":
+                    brush_radius = int(self.brush_size_var.get() * self.zoom_factor)
+                    stroke_width = brush_radius * 2
+
+                    # Create connecting line between points
+                    line = self.canvas.create_line(
+                        self.last_brush_point[0],
+                        self.last_brush_point[1],
+                        cur_x,
+                        cur_y,
+                        fill="red",
+                        width=stroke_width,
+                        capstyle=tk.ROUND,
+                        smooth=True,
+                    )
+                    self.brush_strokes.append(line)
+
+                    # Create new brush circle
+                    circle = self.canvas.create_oval(
+                        cur_x - brush_radius,
+                        cur_y - brush_radius,
+                        cur_x + brush_radius,
+                        cur_y + brush_radius,
+                        outline="red",
+                        width=2,
+                    )
+                    self.brush_strokes.append(circle)
+
+                    # Update tracking variables
+                    self.last_brush_point = (cur_x, cur_y)
+                    self.brush_points.append((cur_x / self.zoom_factor, cur_y / self.zoom_factor))
+                    return
+
+            # Default rectangle update
             self.canvas.coords(self.selection_rect, self.start_x, self.start_y, cur_x, cur_y)
 
     def on_mouse_up(self, event):
         """Handle mouse button release"""
-        # Get current canvas coordinates
         cur_x = self.canvas.canvasx(event.x)
         cur_y = self.canvas.canvasy(event.y)
 
         if self.current_tool == EditorTool.PAN:
             self.canvas.config(cursor="")
 
-        elif self.current_tool in [
-            EditorTool.AUTO_FILL_TEXT,
-            EditorTool.LOAD_IMAGE,
-            EditorTool.ADD_TEXT,
-        ]:
-            # Finalize selection rectangle
-            # Convert display coordinates to image coordinates
-            x1 = min(self.start_x, cur_x) / self.zoom_factor
-            y1 = min(self.start_y, cur_y) / self.zoom_factor
-            x2 = max(self.start_x, cur_x) / self.zoom_factor
-            y2 = max(self.start_y, cur_y) / self.zoom_factor
+        elif self.current_tool in [EditorTool.AUTO_FILL_TEXT, EditorTool.LOAD_IMAGE, EditorTool.ADD_TEXT]:
+            if self.current_tool == EditorTool.AUTO_FILL_TEXT and hasattr(self, "selection_mode_var"):
+                selection_mode = self.selection_mode_var.get()
 
-            # Ensure selection is at least 5x5 pixels
-            if (x2 - x1) >= 5 and (y2 - y1) >= 5:
-                self.selection_coords = (int(x1), int(y1), int(x2), int(y2))
+                if selection_mode == "spot_healing" and hasattr(self, "brush_points") and self.brush_points:
+                    # Clean up temporary brush strokes
+                    for stroke in self.brush_strokes:
+                        self.canvas.delete(stroke)
+                    self.brush_strokes = []
 
-                # Automatically trigger appropriate action based on the selected tool
-                if self.current_tool == EditorTool.AUTO_FILL_TEXT:
-                    self.apply_auto_dark_fill()  # Auto-apply dark fill
-                elif self.current_tool == EditorTool.ADD_TEXT:
-                    self.add_text_to_selection()
-                elif self.current_tool == EditorTool.LOAD_IMAGE:
-                    self.load_image_to_selection()
-            else:
-                # Selection too small, reset
-                self.reset_selection()
+                    # Calculate final selection area
+                    points_x = [p[0] for p in self.brush_points]
+                    points_y = [p[1] for p in self.brush_points]
+
+                    # Get the basic bounds of the center points
+                    center_x1 = min(points_x)
+                    center_y1 = min(points_y)
+                    center_x2 = max(points_x)
+                    center_y2 = max(points_y)
+
+                    # Get brush radius in image coordinates (not zoomed)
+                    brush_size = self.brush_size_var.get()  # Full diameter in pixels
+                    brush_radius = brush_size / 2  # Radius in pixels
+
+                    # Apply brush radius to expand the selection rectangle in all directions
+                    # These are image coordinates (not canvas coordinates)
+                    x1 = center_x1 - brush_radius
+                    y1 = center_y1 - brush_radius
+                    x2 = center_x2 + brush_radius
+                    y2 = center_y2 + brush_radius
+
+                    # Convert to integers to ensure clean pixel boundaries
+                    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+
+                    # Ensure coordinates are within the image bounds
+                    x1 = max(0, x1)
+                    y1 = max(0, y1)
+                    x2 = min(self.img_width, x2)
+                    y2 = min(self.img_height, y2)
+
+                    # Set the selection coordinates
+                    self.selection_coords = (x1, y1, x2, y2)
+
+                    # For debugging, print the selection
+                    print(f"Brush selection: ({x1}, {y1}, {x2}, {y2})")
+                    print(f"Brush size: {brush_size}, Brush radius: {brush_radius}")
+                    print(f"Center bounds: ({center_x1:.1f}, {center_y1:.1f}, {center_x2:.1f}, {center_y2:.1f})")
+
+                    # Create final selection rectangle (using canvas coordinates)
+                    if self.selection_rect:
+                        self.canvas.delete(self.selection_rect)
+                    self.selection_rect = self.canvas.create_rectangle(
+                        x1 * self.zoom_factor,
+                        y1 * self.zoom_factor,
+                        x2 * self.zoom_factor,
+                        y2 * self.zoom_factor,
+                        outline="red",
+                        width=2,
+                        dash=(4, 4),
+                    )
+
+                    # Update status to indicate user should press Apply
+                    self.status_label.config(
+                        text="Selection created from brush strokes. Press 'Apply Changes' to fill."
+                    )
+                    return
+
+                # Default rectangle finalization
+                x1 = min(self.start_x, cur_x) / self.zoom_factor
+                y1 = min(self.start_y, cur_y) / self.zoom_factor
+                x2 = max(self.start_x, cur_x) / self.zoom_factor
+                y2 = max(self.start_y, cur_y) / self.zoom_factor
+
+                if (x2 - x1) >= 5 and (y2 - y1) >= 5:
+                    self.selection_coords = (int(x1), int(y1), int(x2), int(y2))
+                    if self.current_tool == EditorTool.AUTO_FILL_TEXT:
+                        self.apply_auto_dark_fill()
+                    elif self.current_tool == EditorTool.ADD_TEXT:
+                        self.add_text_to_selection()
+                    elif self.current_tool == EditorTool.LOAD_IMAGE:
+                        self.load_image_to_selection()
+                else:
+                    self.reset_selection()
 
     def on_mouse_move(self, event):
         """Handle mouse movement"""
