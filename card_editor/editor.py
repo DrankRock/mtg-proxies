@@ -2,6 +2,7 @@
 Main CardEditor class implementation
 """
 
+import math
 import os
 import tkinter as tk
 from pathlib import Path
@@ -665,88 +666,207 @@ class CardEditor:
             self.canvas.config(cursor="")
 
         elif self.current_tool in [EditorTool.AUTO_FILL_TEXT, EditorTool.LOAD_IMAGE, EditorTool.ADD_TEXT]:
+            # Check if spot healing mode is active for the Auto Fill Text tool
+            is_spot_healing = False
             if self.current_tool == EditorTool.AUTO_FILL_TEXT and hasattr(self, "selection_mode_var"):
                 selection_mode = self.selection_mode_var.get()
+                if selection_mode == "spot_healing":
+                    is_spot_healing = True
 
-                if selection_mode == "spot_healing" and hasattr(self, "brush_points") and self.brush_points:
-                    # Clean up temporary brush strokes
-                    for stroke in self.brush_strokes:
-                        self.canvas.delete(stroke)
-                    self.brush_strokes = []
+            # Handle Spot Healing selection finalization
+            if is_spot_healing and hasattr(self, "brush_points") and self.brush_points:
+                print("\n--- DEBUG: Spot Healing Mouse Up ---") # Add a clear marker
 
-                    # Calculate final selection area
-                    points_x = [p[0] for p in self.brush_points]
-                    points_y = [p[1] for p in self.brush_points]
+                # Clean up temporary visual brush strokes drawn on canvas
+                for stroke in self.brush_strokes:
+                    self.canvas.delete(stroke)
+                self.brush_strokes = []
 
-                    # Get the basic bounds of the center points
-                    center_x1 = min(points_x)
-                    center_y1 = min(points_y)
-                    center_x2 = max(points_x)
-                    center_y2 = max(points_y)
+                # --- Calculate final selection area based on brush path ---
 
-                    # Get brush radius in image coordinates (not zoomed)
-                    brush_size = self.brush_size_var.get()  # Full diameter in pixels
-                    brush_radius = brush_size / 2  # Radius in pixels
+                # Get all center points of the brush path in IMAGE coordinates
+                points_x = [p[0] for p in self.brush_points]
+                points_y = [p[1] for p in self.brush_points]
 
-                    # Apply brush radius to expand the selection rectangle in all directions
-                    # These are image coordinates (not canvas coordinates)
-                    x1 = center_x1 - brush_radius
-                    y1 = center_y1 - brush_radius
-                    x2 = center_x2 + brush_radius
-                    y2 = center_y2 + brush_radius
+                if not points_x or not points_y:
+                    print("DEBUG: No brush points recorded.")
+                    self.reset_selection() # Clear any partial selection
+                    return # Exit if no points
 
-                    # Convert to integers to ensure clean pixel boundaries
-                    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                # Find the min/max extent of the brush path's center
+                center_x1 = min(points_x)
+                center_y1 = min(points_y)
+                center_x2 = max(points_x)
+                center_y2 = max(points_y)
 
-                    # Ensure coordinates are within the image bounds
-                    x1 = max(0, x1)
-                    y1 = max(0, y1)
-                    x2 = min(self.img_width, x2)
-                    y2 = min(self.img_height, y2)
+                print(f"DEBUG: Center bounds (Image Coords): ({center_x1:.2f}, {center_y1:.2f}) to ({center_x2:.2f}, {center_y2:.2f})")
+                print(f"DEBUG: Number of points: {len(self.brush_points)}")
 
-                    # Set the selection coordinates
-                    self.selection_coords = (x1, y1, x2, y2)
+                # Get base brush size (diameter) and radius in IMAGE coordinates
+                # Assumes self.brush_size_var stores the diameter set in the UI
+                brush_size_image = self.brush_size_var.get()
+                brush_radius_image = brush_size_image
 
-                    # For debugging, print the selection
-                    print(f"Brush selection: ({x1}, {y1}, {x2}, {y2})")
-                    print(f"Brush size: {brush_size}, Brush radius: {brush_radius}")
-                    print(f"Center bounds: ({center_x1:.1f}, {center_y1:.1f}, {center_x2:.1f}, {center_y2:.1f})")
+                # Account for the visual thickness of the preview outline
+                # The width used in create_oval for the visual feedback circle
+                preview_outline_width = 2
+                # This width is in CANVAS pixels, find the extra radius it adds visually
+                extra_canvas_radius = preview_outline_width / 2.0
+                # Convert this extra visual radius to IMAGE space using the zoom factor
+                extra_image_radius = extra_canvas_radius / self.zoom_factor
+                # Calculate the effective radius needed to encompass the visual preview
+                effective_radius_image = brush_radius_image + extra_image_radius
 
-                    # Create final selection rectangle (using canvas coordinates)
-                    if self.selection_rect:
-                        self.canvas.delete(self.selection_rect)
-                    self.selection_rect = self.canvas.create_rectangle(
-                        x1 * self.zoom_factor,
-                        y1 * self.zoom_factor,
-                        x2 * self.zoom_factor,
-                        y2 * self.zoom_factor,
-                        outline="red",
-                        width=2,
-                        dash=(4, 4),
-                    )
+                print(f"DEBUG: Brush Size Var (UI Diameter?): {brush_size_image}")
+                print(f"DEBUG: Calculated Image Radius: {brush_radius_image:.2f}")
+                print(f"DEBUG: Extra Image Radius (for outline {preview_outline_width}px): {extra_image_radius:.2f}")
+                print(f"DEBUG: Effective Image Radius for Expansion: {effective_radius_image:.2f}")
 
-                    # Update status to indicate user should press Apply
-                    self.status_label.config(
-                        text="Selection created from brush strokes. Press 'Apply Changes' to fill."
-                    )
-                    return
+                # Expand the center bounds by the effective radius to get the full selection area
+                x1_float = center_x1 - effective_radius_image
+                y1_float = center_y1 - effective_radius_image
+                x2_float = center_x2 + effective_radius_image
+                y2_float = center_y2 + effective_radius_image
 
-                # Default rectangle finalization
-                x1 = min(self.start_x, cur_x) / self.zoom_factor
-                y1 = min(self.start_y, cur_y) / self.zoom_factor
-                x2 = max(self.start_x, cur_x) / self.zoom_factor
-                y2 = max(self.start_y, cur_y) / self.zoom_factor
+                print(f"DEBUG: Expanded bounds (float, Image Coords): ({x1_float:.2f}, {y1_float:.2f}) to ({x2_float:.2f}, {y2_float:.2f})")
 
-                if (x2 - x1) >= 5 and (y2 - y1) >= 5:
-                    self.selection_coords = (int(x1), int(y1), int(x2), int(y2))
-                    if self.current_tool == EditorTool.AUTO_FILL_TEXT:
-                        self.apply_auto_dark_fill()
-                    elif self.current_tool == EditorTool.ADD_TEXT:
-                        self.add_text_to_selection()
-                    elif self.current_tool == EditorTool.LOAD_IMAGE:
-                        self.load_image_to_selection()
+                # Convert final coordinates to integers, ensuring coverage
+                x1 = math.floor(x1_float)
+                y1 = math.floor(y1_float)
+                x2 = math.ceil(x2_float)
+                y2 = math.ceil(y2_float)
+
+                print(f"DEBUG: Final Selection Coords (int, Image Coords): ({x1}, {y1}, {x2}, {y2})")
+
+                # Ensure coordinates are within the actual image dimensions
+                img_w = self.working_image.width
+                img_h = self.working_image.height
+                x1 = max(0, x1)
+                y1 = max(0, y1)
+                x2 = min(img_w, x2)
+                y2 = min(img_h, y2)
+
+                # Store the final selection coordinates (in IMAGE space)
+                self.selection_coords = (x1, y1, x2, y2)
+                print(f"DEBUG: Clamped Selection Coords (Image Coords): {self.selection_coords}")
+
+                # --- Draw the final selection rectangle on the canvas ---
+                if self.selection_rect:
+                    self.canvas.delete(self.selection_rect) # Remove previous rectangle if any
+
+                # Convert final IMAGE coordinates back to CANVAS coordinates for drawing
+                canvas_x1 = x1 * self.zoom_factor
+                canvas_y1 = y1 * self.zoom_factor
+                canvas_x2 = x2 * self.zoom_factor
+                canvas_y2 = y2 * self.zoom_factor
+
+                print(f"DEBUG: Final Rectangle Draw Coords (Canvas Coords): ({canvas_x1:.2f}, {canvas_y1:.2f}) to ({canvas_x2:.2f}, {canvas_y2:.2f})")
+                print("--- END DEBUG ---")
+
+                # Create the visual rectangle on the canvas
+                self.selection_rect = self.canvas.create_rectangle(
+                    canvas_x1,
+                    canvas_y1,
+                    canvas_x2,
+                    canvas_y2,
+                    outline="red",
+                    width=2,        # Visual width of the selection rectangle itself
+                    dash=(4, 4),    # Make it dashed
+                )
+
+                # Update status bar
+                self.status_label.config(
+                    text="Selection created from brush strokes. Press 'Apply Changes' to fill."
+                )
+
+                # Reset brush tracking points for the next stroke
+                self.brush_points = []
+                self.last_brush_point = None
+
+                # IMPORTANT: Return here to prevent falling through to default rectangle logic
+                return
+
+            # --- Default Rectangle Selection Logic ---
+            # This part runs if the tool is not AutoFill+SpotHealing,
+            # or if SpotHealing was selected but no points were drawn.
+            print("DEBUG: Reached default rectangle finalization logic.")
+
+            # Use the stored start and current mouse coordinates (already in canvas space)
+            x1_canvas = min(self.start_x, cur_x)
+            y1_canvas = min(self.start_y, cur_y)
+            x2_canvas = max(self.start_x, cur_x)
+            y2_canvas = max(self.start_y, cur_y)
+
+            # Convert the final canvas rectangle coordinates to image coordinates
+            x1_img = x1_canvas / self.zoom_factor
+            y1_img = y1_canvas / self.zoom_factor
+            x2_img = x2_canvas / self.zoom_factor
+            y2_img = y2_canvas / self.zoom_factor
+
+            # Check if the resulting rectangle is large enough
+            min_selection_size = 5 # Minimum width/height in pixels
+            if (x2_img - x1_img) >= min_selection_size and (y2_img - y1_img) >= min_selection_size:
+                # Store the final selection coordinates (integer, image space)
+                self.selection_coords = (int(x1_img), int(y1_img), int(x2_img), int(y2_img))
+                print(f"DEBUG: Default Rectangle Selection Coords: {self.selection_coords}")
+
+                # Update the visual rectangle on the canvas to match the final coordinates
+                if self.selection_rect:
+                     self.canvas.coords(self.selection_rect, canvas_x1, canvas_y1, canvas_x2, canvas_y2)
                 else:
-                    self.reset_selection()
+                    # This case should ideally not happen if on_mouse_down created it
+                     self.selection_rect = self.canvas.create_rectangle(
+                         canvas_x1, canvas_y1, canvas_x2, canvas_y2,
+                         outline="red", width=2, dash=(4, 4)
+                     )
+
+
+                # Trigger actions or update status based on the current tool (if not Spot Healing)
+                if self.current_tool == EditorTool.AUTO_FILL_TEXT and not is_spot_healing:
+                    self.status_label.config(text="Rectangular selection made. Press 'Apply Changes' to fill.")
+                    # Optionally auto-apply here if desired for rectangle mode:
+                    # self.apply_auto_dark_fill()
+                elif self.current_tool == EditorTool.ADD_TEXT:
+                    self.add_text_to_selection() # Assume this function uses self.selection_coords
+                elif self.current_tool == EditorTool.LOAD_IMAGE:
+                    self.load_image_to_selection() # Assume this function uses self.selection_coords
+
+            else:
+                # If selection was too small or invalid, clear it
+                print("DEBUG: Default rectangle selection too small, resetting.")
+                self.reset_selection() # reset_selection should handle deleting the rect and coords
+
+
+        # --- Reset states for tools that need it on mouse up ---
+        if self.current_tool == EditorTool.PAN:
+            pass # Cursor already reset at the start of the function
+
+        # Reset start coordinates for the next action
+        self.start_x = None
+        self.start_y = None
+
+    # Make sure you have a reset_selection method like this:
+    def reset_selection(self):
+        """Clears the current selection coordinates and removes the visual rectangle."""
+        if hasattr(self, 'selection_rect') and self.selection_rect:
+            self.canvas.delete(self.selection_rect)
+        self.selection_rect = None
+        self.selection_coords = None
+        # Also clear brush points if they exist from an interrupted action
+        if hasattr(self, 'brush_points'):
+            self.brush_points = []
+            self.last_brush_point = None
+            # Delete any leftover visual strokes if necessary
+            if hasattr(self, 'brush_strokes'):
+                 for stroke in self.brush_strokes:
+                      try:
+                           self.canvas.delete(stroke)
+                      except tk.TclError:
+                           pass # Ignore if item already deleted
+                 self.brush_strokes = []
+
+        print("DEBUG: Selection Reset")
+
 
     def on_mouse_move(self, event):
         """Handle mouse movement"""
