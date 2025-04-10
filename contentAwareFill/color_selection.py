@@ -108,12 +108,14 @@ class ColorSelectionMixin:
         """Automatically select the darkest color in the selection area"""
         self.status_label.config(text="Finding darkest color in selection...")
         self.progress.start(10)
+        print("\nDEBUG - Starting auto_select_dark_color")
 
         # Process in a separate thread to keep UI responsive
         def process_dark_color_selection():
             try:
                 # Get the current selection coordinates
                 x1, y1, x2, y2 = self.selection_coords
+                print(f"DEBUG - Selection coordinates: ({x1}, {y1}, {x2}, {y2})")
 
                 # Ensure coordinates are within bounds
                 x1 = max(0, min(x1, self.editor.working_image.width - 1))
@@ -123,31 +125,45 @@ class ColorSelectionMixin:
 
                 # Crop the image to the selection area
                 selection_area = self.editor.working_image.crop((x1, y1, x2, y2))
+                print(f"DEBUG - Selection size: {selection_area.width}x{selection_area.height}")
 
                 # Convert to numpy array for processing
                 selection_np = np.array(selection_area)
+                print(f"DEBUG - Selection array shape: {selection_np.shape}")
 
                 # Calculate darkness (lower value = darker)
                 if len(selection_np.shape) == 3 and selection_np.shape[2] >= 3:
                     # For RGB/RGBA images - calculate luminance
-                    # Standard luminance formula: 0.299*R + 0.587*G + 0.114*B
+                    print("DEBUG - Processing as RGB image")
                     luminance = (
                         0.299 * selection_np[:, :, 0] + 0.587 * selection_np[:, :, 1] + 0.114 * selection_np[:, :, 2]
                     )
 
+                    # Print luminance stats
+                    print(
+                        f"DEBUG - Luminance stats: min={luminance.min()}, max={luminance.max()}, mean={luminance.mean():.2f}"
+                    )
+
                     # Find the darkest pixel (minimum luminance)
                     min_y, min_x = np.unravel_index(luminance.argmin(), luminance.shape)
+                    print(
+                        f"DEBUG - Darkest pixel found at ({min_x}, {min_y}) with luminance {luminance[min_y, min_x]:.2f}"
+                    )
 
                     # Get the color of the darkest pixel
                     dark_color = selection_np[min_y, min_x][:3]  # Get only RGB components
+                    print(f"DEBUG - Darkest color RGB: {dark_color}")
                 else:
                     # For grayscale images
+                    print("DEBUG - Processing as grayscale image")
                     min_y, min_x = np.unravel_index(selection_np.argmin(), selection_np.shape)
                     dark_value = selection_np[min_y, min_x]
                     dark_color = (dark_value, dark_value, dark_value)  # Convert to RGB tuple
+                    print(f"DEBUG - Darkest grayscale value: {dark_value}")
 
                 # Set the selected color
                 hex_color = f"#{dark_color[0]:02x}{dark_color[1]:02x}{dark_color[2]:02x}"
+                print(f"DEBUG - Hex color: {hex_color}")
 
                 # Update UI in the main thread
                 self.fill_dialog.after(0, lambda: self.selection_color_var.set(hex_color))
@@ -175,6 +191,7 @@ class ColorSelectionMixin:
                 import traceback
 
                 traceback.print_exc()
+                print(f"DEBUG - Error in auto_select_dark_color: {str(e)}")
                 self.fill_dialog.after(
                     0, lambda: self.status_label.config(text=f"Error finding darkest color: {str(e)}")
                 )
